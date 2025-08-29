@@ -25,8 +25,6 @@ A custom Model Context Protocol (MCP) server that provides vector search capabil
 
 ## MongoDB Configuration
 
-## Data Structure
-
 This server is designed to work with the [MongoDB Atlas Sample Airbnb Dataset](https://www.mongodb.com/docs/atlas/sample-data/sample-airbnb/). The server expects documents in your MongoDB collection to have the following structure:
 
 ```json
@@ -168,8 +166,6 @@ It's recommended to use a Python virtual environment to isolate dependencies and
    ```
 
 2. **Activate the virtual environment**:
-   
-   **On Linux/macOS:**
    ```bash
    source mongodb-mcp-env/bin/activate
    ```
@@ -188,7 +184,8 @@ It's recommended to use a Python virtual environment to isolate dependencies and
    export MONGO_COL=your_collection
    ```
 
-   The `MONGO_CREDS` secret in AWS Secrets Manager should contain:
+5. **Add a AWS Secrets Manager Key**
+   The `MONGO_CREDS` secret name should match the MONGO_CREDS env variable. The value should contain:
    ```json
    {
      "username": "your_mongodb_username",
