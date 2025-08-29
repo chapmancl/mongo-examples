@@ -1,0 +1,6 @@
+fastmcp
+asyncio-mqtt
+boto3
+pymongo>=4.6.0
+motor>=3.3.0
+
