@@ -33,8 +33,6 @@ class QueryProcessor:
         # Connect to the MongoDB collection for vectorized data
         self.collection = self._get_vector_collection()
         
-        self.mcp_client = fastmcp.Client(settings.mong_mcp)
-        self.mcp_tools_config = None
         
     def _create_bedrock_client(self) -> None:
         self.bedrock_client = boto3.client(
