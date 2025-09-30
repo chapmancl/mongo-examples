@@ -32,7 +32,10 @@ This MCP server dynamically loads its configuration from a MongoDB collection. T
 
 ### Configuration Collection
 
-Create a MongoDB collection to store your MCP configurations (e.g., `mcp_configurations`). Each document in this collection defines a complete MCP server configuration.
+Create a MongoDB collection to store your MCP configurations (e.g., `mcp_tools`). Each document in this collection defines a complete MCP server configuration.
+1. Create a mongodb database called `mcp_config`
+2. Create a mongodb collection called `mcp_tools`
+3. these values can be changed in `settings_aws.py`
 
 ### Configuration JSON Format
 
