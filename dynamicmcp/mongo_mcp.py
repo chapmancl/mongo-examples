@@ -6,6 +6,7 @@ import logging
 from pydantic import Field
 from pymongo.errors import PyMongoError
 from fastmcp import FastMCP
+from fastapi import FastAPI
 from starlette.responses import JSONResponse
 from mongodb_vector_server import MongoDBVectorServer
 from middle_tool_response import ListToolsLoggingMiddleware
@@ -26,10 +27,12 @@ mongo_server.set_config(list_tools_middleware.ANNOTATIONS)
 # Create FastMCP server instance
 mcp = FastMCP("mongodb-vector-server")
 
+
 # Add the middleware
 mcp.add_middleware(list_tools_middleware)
 
 # this is for the AWS load balancer health check
+@mcp.custom_route("/{TOOL_NAME}/health", methods=["GET"])
 @mcp.custom_route("/health", methods=["GET"])
 async def http_health_check(request):
     """Regular HTTP GET endpoint for health checks"""
@@ -39,7 +42,6 @@ async def http_health_check(request):
     #if failed:
     #    status_code = 500        
     return JSONResponse(server_info, status_code=status_code)
-
 
 @mcp.tool()
 async def vector_search(
@@ -236,6 +238,11 @@ async def aggregate_query(
         return f"Unexpected error executing aggregate_query: {str(e)}"
 
 
+mcp_app = mcp.http_app(path=f"/mcp")
+# Key: Pass lifespan to FastAPI
+app = FastAPI(title=TOOL_NAME, lifespan=mcp_app.lifespan)
+# Mount the MCP server
+app.mount(f"/{TOOL_NAME}", mcp_app)
 
 def main():
     """
@@ -250,5 +257,7 @@ def main():
     mcp.run(transport="sse",  port=8001) # this is for local IDE/Cline integration
     #mcp.run(transport="http", host="0.0.0.0", port=8000) # this is for AWS containers  
 
+
 if __name__ == "__main__":
-    main()
+    #main()
+    pass

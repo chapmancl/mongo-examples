@@ -3,7 +3,6 @@ from typing import List, Dict
 import mcp.types as mt    
 import logging
 import traceback
-import asyncio
 from mongodb_client import MongoDBClient
 from settings_aws import settings
 
@@ -60,7 +59,6 @@ class ListToolsLoggingMiddleware(Middleware):
         
         return docstring
 
-    
     async def on_list_tools(
         self, 
         context: MiddlewareContext[mt.ListToolsRequest], 

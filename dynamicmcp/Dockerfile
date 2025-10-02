@@ -25,5 +25,4 @@ ENV PYTHONUNBUFFERED=1
 EXPOSE 8000
 
 # Run the MCP server
-CMD ["python", "mongo_mcp.py"]
-#CMD ["fastmcp", "run", "mongo_mcp.py", "--transport", "http","--port","8000"]
+CMD ["fastapi", "run", "mongo_mcp.py"]

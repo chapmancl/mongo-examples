@@ -28,7 +28,8 @@ class MongoDBVectorServer(MongoDBClient):
     
     def set_config(self, config: Dict):
         """Set the tool configuration from a dictionary"""
-        print(f"Using settings from tool config {config["Name"]}")
+        tool_name = config.get("Name", "UnknownTool")
+        print(f"Using settings from tool config {tool_name}")
         self.tool_config = config
         self._db_name = self.tool_config["module_info"]['database']
         self._collection_name = self.tool_config["module_info"]['collection']
