@@ -19,15 +19,20 @@ class ListToolsLoggingMiddleware(Middleware):
         self.mongo_client._db_name = settings.mcp_config_db
         self.mongo_client._collection_name = settings.mcp_config_col
         self.ANNOTATIONS = None
+        self.ALLTOOLS = []
         self.load_annotations()  
         
     def load_annotations(self):
         """Load tool annotations from the JSON configuration file"""        
         try:
             self.mongo_client.sync_connect_to_mongodb()
-            doc = self.mongo_client.collection.find_one({"Name": self.tool_name })
+            doc = self.mongo_client.collection.find_one({"Name": self.tool_name})
             print(f"Loaded dynamic config for tool {self.tool_name}")       
             self.ANNOTATIONS = doc
+
+            # load all tools to return configs
+            self.ALLTOOLS = list(self.mongo_client.collection.distinct("Name",{ "active": True}))
+
             return doc
         except Exception as e:
             logger.error(f"Failed to load annotations: {e}")
@@ -37,6 +42,8 @@ class ListToolsLoggingMiddleware(Middleware):
     # Get tool annotation by name
     def get_tool_annotation(self, tool_name: str) -> Dict:
         """Get annotation data for a specific tool"""
+        # load it fresh every time? 
+        self.load_annotations()  
         tools = self.ANNOTATIONS.get('tools', [])
         if tool_name in tools:
             tool = tools[tool_name]

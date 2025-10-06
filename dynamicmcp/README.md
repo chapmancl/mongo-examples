@@ -24,7 +24,7 @@ A highly configurable Model Context Protocol (MCP) server that dynamically loads
 1. Setup MongoDB with MCP configurations (see [Dynamic Configuration Setup](#dynamic-configuration-setup) below)
 2. Setup your python environment (see [Python Virtual Environment Setup](#python-virtual-environment-setup))
 3. Install requirements (see [Installation](#installation))
-4. Run fastmcp (see [FastMCP Deployment](#fastmcp-deployment))
+4. Run fastapi (see [FastAPI Deployment](#fastapi-deployment))
 
 ## Dynamic Configuration Setup
 
@@ -32,11 +32,11 @@ This MCP server dynamically loads its configuration from a MongoDB collection. T
 
 ### Configuration Collection
 
-Create a MongoDB collection to store your MCP configurations (e.g., `mcp_configurations`). Each document in this collection defines a complete MCP server configuration.
+Create a MongoDB collection to store your MCP configurations (e.g., `mcp_tools`). Each document in this collection defines a complete MCP server configuration.
 
 ### Configuration JSON Format
 
-Each configuration document should follow this structure (see `mongo_mcp_annotations.json` for complete examples):
+Each configuration document should follow this structure (see `mcp_config.mcp_tools.json` for complete examples):
 
 ```json
 {
@@ -103,7 +103,7 @@ Each configuration document should follow this structure (see `mongo_mcp_annotat
 
 ### Example Configurations
 
-The `mongo_mcp_annotations.json` file contains two complete examples:
+The `mcp_config.mcp_tools.json` file contains two complete examples:
 
 1. **AirbnbSearch**: Full-featured configuration with vector search, text search, and data analysis tools for Airbnb property data
 2. **NetflixSearch**: Simplified configuration with basic data exploration tools for movie data
@@ -278,7 +278,7 @@ For text search functionality, ensure you have a text search index named `search
 4. **Configure AWS Environment Variables**:
    Set the following environment variables for AWS Secrets Manager integration:
    ```bash
-   export AWS_REGION=us-east-2
+   export AWS_REGION=your-aws-region
    export MONGO_CREDS=your-secrets-manager-secret-name
    ```
 
@@ -292,26 +292,19 @@ For text search functionality, ensure you have a text search index named `search
    }
    ```
 
-## FastMCP Deployment
+## FastAPI Deployment
 
-This server can be deployed using [FastMCP](https://gofastmcp.com/) for enhanced deployment options and multiple transport capabilities.
-For more FastMCP deployment options, see the [FastMCP documentation](https://gofastmcp.com/deployment/running-server).
+This server can be deployed using [FastAPI](https://gofastapi.com/) for enhanced deployment options and multiple transport capabilities.
+For more FastAPI deployment options, see the [FastAPI documentation](https://gofastapi.com/deployment/running-server).
 
 **Default HTTP Transport (for production/containers):**
 ```bash
-python mongo_mcp.py
+fastapi run mongo_mcp.py
 ```
 
 The server will start with HTTP transport on port 8000 at `http://localhost:8000/mcp/`.
 
-**For Local IDE Integration (Cline, Copilot, etc.):**
-```bash
-fastmcp run mongo_mcp.py --transport sse --port 8001
-```
-
-This starts the server with SSE (Server-Sent Events) transport for local development and IDE integration.
-
-### Docker with FastMCP
+### Docker Instructions
 
 Build the Docker image for the MCP server:
 
@@ -323,22 +316,22 @@ docker build -t mongodb-vector-mcp .
 
 1. **Create an ECR repository** (if it doesn't exist):
    ```bash
-   aws ecr create-repository --repository-name mongodb-vector-mcp --region us-east-2
+   aws ecr create-repository --repository-name mongodb-vector-mcp --region your-aws-region
    ```
 
 2. **Get the login token and authenticate Docker to ECR**:
    ```bash
-   aws ecr get-login-password --region us-east-2 | docker login --username AWS --password-stdin <account-id>.dkr.ecr.us-east-2.amazonaws.com
+   aws ecr get-login-password --region your-aws-region | docker login --username AWS --password-stdin <account-id>.dkr.ecr.your-aws-region.amazonaws.com
    ```
 
 3. **Tag the image for ECR**:
    ```bash
-   docker tag mongodb-vector-mcp:latest <account-id>.dkr.ecr.us-east-2.amazonaws.com/mongodb-vector-mcp:latest
+   docker tag mongodb-vector-mcp:latest <account-id>.dkr.ecr.your-aws-region.amazonaws.com/mongodb-vector-mcp:latest
    ```
 
 4. **Push the image to ECR**:
    ```bash
-   docker push <account-id>.dkr.ecr.us-east-2.amazonaws.com/mongodb-vector-mcp:latest
+   docker push <account-id>.dkr.ecr.your-aws-region.amazonaws.com/mongodb-vector-mcp:latest
    ```
 
 Replace `<account-id>` with your AWS account ID.
@@ -346,18 +339,191 @@ Replace `<account-id>` with your AWS account ID.
 You can run the server in Docker with FastMCP HTTP transport by with the Dockerfile CMD:
 
 ```dockerfile
-CMD ["python", "mongo_mcp.py"]
+CMD ["fastapi", "run", "mongo_mcp.py"]
 ```
 
 Then run the container locally with port mapping:
 
 ```bash
 docker run -p 8000:8000 \
-  -e AWS_REGION=us-east-2 \
+  -e AWS_REGION=your-aws-region \
   -e MONGO_CREDS=your-secret-name \
   mongodb-vector-mcp:latest
 ```
 
+## Kubernetes Deployment with Terraform
+
+This project includes Terraform configuration for deploying the MCP server to Amazon EKS (Elastic Kubernetes Service). The Terraform deployment creates multiple MCP services based on different MongoDB configurations.
+
+### Prerequisites for Kubernetes Deployment
+
+- AWS CLI configured with appropriate permissions
+- Terraform installed (version 1.0+)
+- An existing EKS cluster
+- AWS Load Balancer Controller installed in your EKS cluster
+- IAM role for Service Account (IRSA) configured for accessing AWS Secrets Manager
+- SSL certificate in AWS Certificate Manager (optional, for HTTPS)
+
+### Terraform Configuration
+
+The `main.tf` file provides a complete infrastructure setup including:
+
+- **Multiple Service Deployment**: Deploy multiple MCP server instances with different configurations
+- **Load Balancing**: AWS Application Load Balancer with SSL termination
+- **Service Discovery**: Kubernetes services and ingress rules for routing
+- **AWS Integration**: IAM roles for Service Account (IRSA) for Secrets Manager access
+- **Health Checks**: Configured health check endpoints for each service
+
+### Configuration Variables
+
+Create a `terraform.tfvars` file based on `terraform.tfvars.example`:
+
+```hcl
+# List of MCP configurations to deploy
+services = ["AirbnbSearch", "WeatherSearch", "MflixSearch"]
+
+# Kubernetes configuration
+namespace = "mcp-search-app"
+cluster_name = "your-eks-cluster-name"
+K8service_account = "mcp-mcp-sa"
+
+# AWS configuration
+aws_region = "your-aws-region"
+ecr_repository = "your-account-id.dkr.ecr.your-aws-region.amazonaws.com/mongodb-dynamic-mcp"
+image_tag = "latest"
+
+# IAM and SSL
+iam_role_arn = "arn:aws:iam::your-account-id:role/YourMCPRole"
+certificate_arn = "arn:aws:acm:your-aws-region:your-account-id:certificate/your-cert-arn"
+
+# MongoDB credentials
+mongo_creds = "your-secrets-manager-secret-name"
+```
+
+### Deploying to Kubernetes
+
+1. **Build and push the Docker image** to ECR:
+   ```bash
+   # Build the image
+   docker build -t mongodb-dynamic-mcp .
+   
+   # Tag for ECR
+   docker tag mongodb-dynamic-mcp:latest your-account-id.dkr.ecr.your-aws-region.amazonaws.com/mongodb-dynamic-mcp:latest
+   
+   # Push to ECR
+   docker push your-account-id.dkr.ecr.your-aws-region.amazonaws.com/mongodb-dynamic-mcp:latest
+   ```
+
+2. **Initialize and apply Terraform**:
+   ```bash
+   # Initialize Terraform
+   terraform init
+   
+   # Review the deployment plan
+   terraform plan
+   
+   # Apply the configuration
+   terraform apply
+   ```
+
+3. **Access your deployed services**:
+   - Each MCP configuration will be available at `https://your-domain/ServiceName`
+   - For example: `https://your-alb-url/AirbnbSearch`, `https://your-alb-url/WeatherSearch`
+   - The default catch-all route distributes traffic across all services
+
+### Environment Variables in Kubernetes
+
+Each deployed service automatically receives:
+
+- `MCP_TOOL_NAME`: The specific configuration name (e.g., "AirbnbSearch")
+- `MONGO_CREDS`: Reference to AWS Secrets Manager secret
+- `AWS_REGION`: AWS region for Secrets Manager access
+
+The service will dynamically load the appropriate configuration from MongoDB based on the `MCP_TOOL_NAME` environment variable.
+
+## Example MongoDB Configuration Import
+
+This repository includes a ready-to-use MongoDB configuration file (`mcp_config.mcp_tools.json`) that contains example configurations for different datasets. This file can be imported directly into your MongoDB configuration collection to get started quickly.
+
+### Configuration Examples Included
+
+The `mcp_config.mcp_tools.json` file contains three example configurations:
+
+1. **AirbnbSearch** - Full-featured configuration for searching Airbnb property listings
+   - Vector search capabilities for semantic similarity
+   - Text search for keyword-based queries  
+   - Unique value discovery for filters
+   - Custom aggregation queries
+   - Collection metadata access
+
+2. **MflixSearch** - Configuration for Netflix movie data analysis
+   - Data exploration tools for movie collections
+   - Aggregation pipeline support
+   - Field analysis capabilities
+
+3. **WeatherSearch** - Configuration for historical weather data
+   - Weather data analysis tools
+   - Time-series data exploration
+   - Custom aggregation support
+
+### Importing the Configuration
+
+To import the example configurations into your MongoDB collection:
+
+1. **Using MongoDB Compass**:
+   - Open MongoDB Compass and connect to your cluster
+   - Navigate to your configuration database and collection
+   - Click "Add Data" → "Import JSON or CSV file" 
+   - Select the `mcp_config.mcp_tools.json` file
+   - Choose "JSON" as the file type and import
+
+2. **Using MongoDB CLI (mongoimport)**:
+   ```bash
+   mongoimport --uri "mongodb+srv://username:password@cluster.mongodb.net/your_config_db" \
+     --collection mcp_configurations \
+     --file mcp_config.mcp_tools.json \
+     --jsonArray
+   ```
+
+3. **Using MongoDB Shell**:
+   ```javascript
+   // Connect to your MongoDB cluster
+   use your_config_database
+   
+   // Load and insert the configuration data
+   const configs = [/* paste content from mcp_config.mcp_tools.json */];
+   db.mcp_configurations.insertMany(configs);
+   ```
+
+### Customizing the Examples
+
+After importing, you can customize these configurations:
+
+- **Database/Collection Names**: Update the `module_info.database` and `module_info.collection` fields to point to your data
+- **Tool Parameters**: Modify tool parameters to match your specific use case
+- **Index Names**: Update vector and text search index names to match your MongoDB indexes
+- **Field Names**: Adjust projection fields and filter options based on your data schema
+- **Active Status**: Set `active: true/false` to enable/disable specific configurations
+
+### Using Different Configurations
+
+Each imported configuration can be used by setting the `MCP_TOOL_NAME` environment variable:
+
+```bash
+# Use the AirbnbSearch configuration
+export MCP_TOOL_NAME=AirbnbSearch
+fastapi run mongo_mcp.py
+
+# Use the MflixSearch configuration  
+export MCP_TOOL_NAME=MflixSearch
+fastapi run mongo_mcp.py
+
+# Use the WeatherSearch configuration
+export MCP_TOOL_NAME=WeatherSearch
+fastapi run mongo_mcp.py
+```
+
+This allows you to run multiple MCP server instances, each configured for different datasets and use cases, all from the same codebase.
 
 ### Available Tools
 
@@ -459,7 +625,7 @@ This MCP server is designed to work seamlessly with Amazon Bedrock Agents using 
            "mongodb-vector-mcp:latest"
        ],
        env={
-           "AWS_REGION": "us-east-2",
+           "AWS_REGION": "your-aws-region",
            "MONGO_CREDS": "your-secrets-manager-secret-name"           
        }
    )
@@ -493,8 +659,8 @@ Add to your MCP configuration file:
 {
   "mcpServers": {
     "mongodb-vector": {
-      "command": "python",
-      "args": ["/path/to/your/mcp.py"],
+      "command": "fastapi",
+      "args": ["run", "/path/to/your/mongo_mcp.py"],
       "env": {}
     }
   }
@@ -512,11 +678,11 @@ Cline is a popular VS Code extension that supports MCP servers. To integrate thi
    {
      "cline.mcpServers": {
        "mongodb-vector-search": {
-         "command": "fastmcp",
+         "command": "fastapi",
          "args": ["run", "mongo_mcp.py", "--transport", "sse", "--port", "8001"],
          "cwd": "/path/to/your/mongodb-mcp-project",
          "env": {
-           "AWS_REGION": "us-east-2",
+           "AWS_REGION": "your-aws-region",
            "MONGO_CREDS": "your-secrets-manager-secret-name"
          }
        }
@@ -527,7 +693,7 @@ Cline is a popular VS Code extension that supports MCP servers. To integrate thi
 3. **Alternative Configuration** (if running the server separately):
    If you prefer to run the server manually, start it with:
    ```bash
-   fastmcp run mongo_mcp.py --transport sse --port 8001
+   fastapi run mongo_mcp.py --transport sse --port 8001
    ```
    
    Then configure Cline to connect to the running server:

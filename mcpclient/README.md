@@ -2,6 +2,39 @@
 
 This is a Model Context Protocol (MCP) client that connects to a MongoDB Atlas vector search MCP server and AWS Bedrock to process user queries using Claude LLM with tool support.
 
+## Available Clients
+
+### 1. `airbnb_mcp_cached.py` - Enhanced Client with Caching (Recommended)
+
+The enhanced client provides comprehensive caching support and multi-MCP server capabilities:
+
+**Key Features:**
+- **Multi-MCP Server Support**: Can connect to and use tools from multiple MCP servers simultaneously
+- **Advanced Caching System**: Implements multi-level caching including:
+  - Bedrock message caching with smart cache point management
+  - MCP tool discovery caching
+  - Tool response caching with configurable TTL
+  - Conversation history caching
+- **Smart Cache Management**: Automatically manages Bedrock's 4 cache block limit
+- **Dynamic Tool Discovery**: Automatically discovers available MCP tools from configured servers
+- **Error Handling**: Robust error handling for AWS and MCP server communications
+- **Performance Optimization**: Reduces API calls and improves response times through intelligent caching
+
+**Usage:**
+```bash
+python airbnb_mcp_cached.py
+```
+
+**Interactive Commands:**
+- `clear` - Clear conversation history and all caches  
+- `cache stats` - Show detailed cache statistics
+- `cache clear` - Clear all caches while keeping conversation history
+- `<question>` - Ask Claude with full MCP tool support and caching
+
+### 2. `airbnb-mcp.py` - Basic Client
+
+A simpler client implementation without caching features.
+
 ## Python Setup Instructions
 
 ### Prerequisites
@@ -33,6 +66,7 @@ Before running the application, you need to configure your settings:
 1. Copy or create a `settingsairbnb.py` file with your configuration:
    - AWS region settings
    - MongoDB MCP server connection details
+      mongo_mcp is for the basic client, mongo_mcp_root is for the dynamic multi-mcp endpoint system.
    - Bedrock model ID
 
 Example `settingsairbnb.py`:
@@ -42,7 +76,8 @@ aws_region = "us-east-1"
 LLM_MODEL_ID = "anthropic.claude-3-sonnet-20240229-v1:0"
 
 # MCP Server Configuration
-mong_mcp = "your-mcp-server-endpoint"
+mong_mcp = "http://localhost:8000/mcp/"
+mongo_mcp_root = "http://localhost:8000" 
 ```
 
 ### 4. Run the Application

@@ -13,7 +13,6 @@ from middle_tool_response import ListToolsLoggingMiddleware
 import traceback
 import os
 
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -26,22 +25,9 @@ mongo_server.set_config(list_tools_middleware.ANNOTATIONS)
 
 # Create FastMCP server instance
 mcp = FastMCP("mongodb-vector-server")
-
-
 # Add the middleware
 mcp.add_middleware(list_tools_middleware)
 
-# this is for the AWS load balancer health check
-@mcp.custom_route("/{TOOL_NAME}/health", methods=["GET"])
-@mcp.custom_route("/health", methods=["GET"])
-async def http_health_check(request):
-    """Regular HTTP GET endpoint for health checks"""
-    # always return something or else the load balancer will mark it unhealthy and continue to reload the container
-    failed, server_info = await mongo_server.get_mongo_info()
-    status_code = 200
-    #if failed:
-    #    status_code = 500        
-    return JSONResponse(server_info, status_code=status_code)
 
 @mcp.tool()
 async def vector_search(
@@ -239,10 +225,51 @@ async def aggregate_query(
 
 
 mcp_app = mcp.http_app(path=f"/mcp")
+#mcp_app = mcp.http_app(path=f"/{TOOL_NAME}/mcp")
 # Key: Pass lifespan to FastAPI
 app = FastAPI(title=TOOL_NAME, lifespan=mcp_app.lifespan)
+
+# Root route
+@app.get("/")
+async def root_endpoint():
+    """Root endpoint"""
+    list_tools_middleware.load_annotations()  # Ensure annotations are loaded
+    return JSONResponse({
+        "message": "MongoDB Vector Server MCP",
+        "status": "running",
+        "available_tools": list_tools_middleware.ALLTOOLS,
+        "available_endpoints": [
+            "/health",
+            f"/{TOOL_NAME}/health" if TOOL_NAME else None,
+            f"/{TOOL_NAME}/mcp" if TOOL_NAME else "/mcp",
+            "/tools_config"
+        ]
+    })
+
+# this is for the AWS load balancer health check
+@app.get("/{TOOL_NAME}/health")
+@app.get("/health")
+async def http_health_check():
+    """Regular HTTP GET endpoint for health checks"""
+    # always return something or else the load balancer will mark it unhealthy and continue to reload the container
+    failed, server_info = await mongo_server.get_mongo_info()
+    status_code = 200
+    #if failed:
+    #    status_code = 500        
+    return JSONResponse(server_info, status_code=status_code)
+
+@app.get("/tools_config")
+async def http_get_tools_config():
+    """Regular HTTP GET endpoint for health checks"""
+    # always return something or else the load balancer will mark it unhealthy and continue to reload the container
+    list_tools_middleware.load_annotations()
+    results = list_tools_middleware.ALLTOOLS
+    return JSONResponse({"available_tools": results}, status_code=200)
+
 # Mount the MCP server
 app.mount(f"/{TOOL_NAME}", mcp_app)
+#app.mount(f"/", mcp_app)
+
 
 def main():
     """

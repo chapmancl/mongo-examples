@@ -1,0 +1,34 @@
+# Example Terraform variables file
+# Copy this file to terraform.tfvars and customize for your environment
+
+# Comma-separated list of service names
+# these must match the corresponding service name in the Mongo config collection
+services = ["MflixSearch","AirbnbSearch"]  #,"WeatherSearch"
+
+# Kubernetes namespace
+namespace = "mcp-search-app"
+
+# ECR repository URL (update with your account ID and region)
+ecr_repository = "<<YOUR AWS ACCOUNT>>.dkr.ecr.<<REGION>>.amazonaws.com/mongodb-dynamic-mcp"
+
+# Docker image tag
+image_tag = "latest"
+
+# AWS Certificate Manager certificate ARN for SSL
+# Replace YOUR_CERT_ARN_HERE with your actual certificate ARN
+certificate_arn = "arn:aws:acm:<<REGION>>:<<YOUR AWS ACCOUNT>>:certificate/YOUR_CERT_ARN_HERE"
+
+# MongoDB credentials identifier
+mongo_creds = "demo1"
+
+# AWS region where your EKS cluster is located
+aws_region = "your-aws-region"
+
+# EKS cluster name
+cluster_name = "your-eks-cluster-name"
+
+# Kubernetes service account name
+K8service_account = "mcp-search-sa"
+
+# IAM role ARN for service account (IRSA) - enables AWS permissions for pods
+iam_role_arn = "arn:aws:iam::<<YOUR AWS ACCOUNT>>:role/<<ROLENAME>>"
