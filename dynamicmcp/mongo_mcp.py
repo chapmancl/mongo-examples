@@ -28,7 +28,6 @@ mcp = FastMCP("mongodb-vector-server")
 # Add the middleware
 mcp.add_middleware(list_tools_middleware)
 
-
 @mcp.tool()
 async def vector_search(
     query_text: Annotated[str, Field(description= "Natural language query describing desired property characteristics.")],    
@@ -153,6 +152,7 @@ async def get_collection_info() -> str:
         info = {
             "database": mongo_info["mongodb"]["database"],
             "collection": mongo_info["mongodb"]["collection"],
+            "description": mongo_server.description,
             "document_count": mongo_info["mongodb"]["document_count"],
             "size_bytes": mongo_info["mongodb"]["size_bytes"],
             "indexes": [
@@ -265,6 +265,33 @@ async def http_get_tools_config():
     list_tools_middleware.load_annotations()
     results = list_tools_middleware.ALLTOOLS
     return JSONResponse({"available_tools": results}, status_code=200)
+
+
+@app.post("/vectorize")
+async def vectorize_text(body: Dict[str, Any]) -> str:
+    """Dynamic docstring loaded from JSON configuration"""
+    try:
+        # Extract textChunk from the request body
+        text_chunk = body.get("textChunk")
+        
+        if not text_chunk or not isinstance(text_chunk, str):
+            return json.dumps({
+                "error": "textChunk must be a non-empty string in the request body"
+            }, indent=2)
+        
+        vector = await mongo_server.generate_embedding(text_chunk)
+        logger.info(f"Vectorization successful for input text of length {len(text_chunk)}")
+        return json.dumps({
+            "input_text": text_chunk,
+            "vector": vector
+        }, indent=2)
+        
+    except Exception as e:
+        logger.error(f"Vectorization failed: {e}")
+        traceback.print_exc()
+        return json.dumps({
+            "error": f"Error executing vectorize_text: {str(e)}"
+        }, indent=2)
 
 # Mount the MCP server
 app.mount(f"/{TOOL_NAME}", mcp_app)

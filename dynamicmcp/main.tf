@@ -2,7 +2,7 @@
 variable "services" {
   description = "Comma-separated list of service names"
   type        = list(string)
-  default     = ["AirbnbSearch","WeatherSearch"] #,"WeatherSearch","MflixSearch"
+  default     = ["AirbnbSearch","WeatherSearch"] # "MflixSearch"
 }
 
 variable "namespace" {

@@ -25,14 +25,18 @@ class MongoDBVectorServer(MongoDBClient):
         super().__init__()
         self.bedrock_client = boto3.client('bedrock-runtime', region_name=settings.aws_region)
         self.tool_config = None
+        self.description = "MongoDB Vector Search MCP Server"
     
     def set_config(self, config: Dict):
         """Set the tool configuration from a dictionary"""
+        if config is None:
+            raise ValueError("Config cannot be None. Check env variables and AWS secrets.")
         tool_name = config.get("Name", "UnknownTool")
         print(f"Using settings from tool config {tool_name}")
         self.tool_config = config
         self._db_name = self.tool_config["module_info"]['database']
         self._collection_name = self.tool_config["module_info"]['collection']
+        self.description = self.tool_config["module_info"]['description']
         
     def get_current_ip(self) -> str:
         """
@@ -51,7 +55,6 @@ class MongoDBVectorServer(MongoDBClient):
             logger.error(f"Error fetching current IP: {e}")
             return f"Error fetching current IP: {e}"
             
-    
     async def get_mongo_info(self) -> Tuple[bool, Dict[str, Any]]:
         """
         Retrieve MongoDB connection and collection health information.
