@@ -37,57 +37,57 @@ async def vector_search(
         default=None, 
         description= "Optional list of filters to narrow search results."
     )] = None
-) -> str:
+) -> Dict[str, Any]:
     """Dynamic docstring loaded from JSON configuration"""
     try:
         if not query_text or not isinstance(query_text, str):
-            return "Error: query_vector must be a non-empty array of numbers"
+            return {"error": "query_vector must be a non-empty array of numbers"}
         
         results = await mongo_server.vector_search(query_text, filters, limit, num_candidates)
-        
-        return json.dumps({
-            "results": results,
+        jobj = json.dumps(results, default=str)  # serialize results to JSON string... sometime results don't auto-serialize well so do it now
+        return {
+            "results": jobj,
             "count": len(results),
             "query_info": {                
                 "limit": limit,
                 "num_candidates": num_candidates
             }
-        }, indent=2, default=str)
+        }
         
     except Exception as e:
         logger.error(f"Vector search failed: {e}")
         traceback.print_exc()
-        return f"Error executing vector_search: {str(e)}"
+        return {"error":f"Error executing vector_search: {str(e)}" }
 
 @mcp.tool()
 async def text_search(
     query_text: Annotated[str, Field(description="Keywords or phrases to search for across property fields.")],
     limit: Annotated[int, Field(default=10, description="Maximum number of results to return.", ge=1, le=100)] = 10
-) -> str:
+) -> Dict[str, Any]:
     """Dynamic docstring loaded from JSON configuration"""
     try:
         if not query_text:
-            return "Error: query_text is required"
+            return {"error": "query_text is required"}
         
         results = await mongo_server.text_search(query_text, limit)
-        
-        return json.dumps({
-            "results": results,
+        jobj = json.dumps(results, default=str) 
+        return {
+            "results": jobj,
             "count": len(results),
             "query_info": {
                 "query_text": query_text,
                 "limit": limit
             }
-        }, indent=2, default=str)
+        }
         
     except Exception as e:
         logger.error(f"Text search failed: {e}")
-        return f"Error executing text_search: {str(e)}"
+        return {"error":f"Error executing text_search: {str(e)}"}
 
 @mcp.tool()
 async def get_unique_values(
     field: Annotated[str, Field(description="Field name to get unique values for.")]
-) -> str:
+) -> Dict[str, Any]:
     """Dynamic docstring loaded from JSON configuration"""
     try:
         
@@ -118,20 +118,20 @@ async def get_unique_values(
         # Add percentage to each result
         for result in results:
             result["percentage"] = round((result["count"] / total_docs) * 100, 2)
-        
-        return json.dumps({
+        jobj = json.dumps(results, default=str)
+        return {
             "field": field,
-            "unique_values": results,
+            "unique_values": jobj,
             "total_unique_count": len(results),
             "total_documents": total_docs
-        }, indent=2, default=str)
+        }
         
     except Exception as e:
         logger.error(f"Get unique values failed: {e}")
-        return f"Error executing get_unique_values: {str(e)}"
+        return {"error":f"Error executing get_unique_values: {str(e)}"}
 
 @mcp.tool()
-async def get_collection_info() -> str:
+async def get_collection_info() -> Dict[str, Any]:
     """Dynamic docstring loaded from JSON configuration"""
     
     try:
@@ -150,6 +150,7 @@ async def get_collection_info() -> str:
             search_indexes.append(sidx)
         
         info = {
+            "name": mongo_server.tool_name,
             "database": mongo_info["mongodb"]["database"],
             "collection": mongo_info["mongodb"]["collection"],
             "description": mongo_server.description,
@@ -166,29 +167,29 @@ async def get_collection_info() -> str:
                 sidx for sidx in search_indexes
             ]
         }        
-        return json.dumps(info, indent=2, default=str)
+        return info
         
     except Exception as e:
         logger.error(f"Get collection info failed: {e}")
-        return f"Error executing get_collection_info: {str(e)}"
+        return {"error":f"Error executing get_collection_info: {str(e)}"}
 
 @mcp.tool()
 async def aggregate_query(
     pipeline: Annotated[List[Dict[str, Any]], Field(description="MongoDB aggregation pipeline as a list of stage objects.")],
     limit: Annotated[Optional[int], Field(default=None, description="Optional limit to apply to the results.", ge=1, le=1000)] = None
-) -> str:
-    
+) -> Dict[str, Any]:
+    """Dynamic docstring loaded from JSON configuration"""
     try:
         # Validate pipeline parameter
         if not pipeline or not isinstance(pipeline, list):
-            return "Error: pipeline must be a non-empty list of aggregation stages"
+            return {"error":"pipeline must be a non-empty list of aggregation stages"}
         
         # Validate each stage in the pipeline
         for i, stage in enumerate(pipeline):
             if not isinstance(stage, dict):
-                return f"Error: pipeline stage {i} must be a dictionary, got {type(stage)}"
+                return {"error":f"pipeline stage {i} must be a dictionary, got {type(stage)}"}
             if not stage:
-                return f"Error: pipeline stage {i} cannot be empty"
+                return {"error":f"pipeline stage {i} cannot be empty"}
         
         # Add limit stage if specified and not already present in pipeline
         final_pipeline = pipeline.copy()
@@ -200,28 +201,27 @@ async def aggregate_query(
         
         # Execute the aggregation pipeline
         results = await mongo_server.agg_pipeline(final_pipeline)
-        
+        jobj = json.dumps(results,default=str)
         logger.info(f"Aggregation query returned {len(results)} results")
         
-        return json.dumps({
-            "results": results,
+        return {
+            "results": jobj,
             "count": len(results),
             "query_info": {
                 "pipeline": final_pipeline,
                 "stages_count": len(final_pipeline),
                 "limit_applied": limit
             }
-        }, indent=2, default=str)
-        
+        }
     except PyMongoError as e:
         logger.error(f"Aggregation query failed: {e}")
-        return f"Error executing aggregation pipeline: {str(e)}"
+        return {"error":f"Error executing aggregation pipeline: {str(e)}"}
     except json.JSONDecodeError as e:
         logger.error(f"JSON serialization failed: {e}")
-        return f"Error serializing results: {str(e)}"
+        return {"error":f"Error serializing results: {str(e)}"}
     except Exception as e:
         logger.error(f"Unexpected error in aggregate_query: {e}")
-        return f"Unexpected error executing aggregate_query: {str(e)}"
+        return {"error":f"Unexpected error executing aggregate_query: {str(e)}"}
 
 
 mcp_app = mcp.http_app(path=f"/mcp")
@@ -231,87 +231,84 @@ app = FastAPI(title=TOOL_NAME, lifespan=mcp_app.lifespan)
 
 # Root route
 @app.get("/")
-async def root_endpoint():
+async def root_endpoint() -> Dict[str, Any]:
     """Root endpoint"""
     list_tools_middleware.load_annotations()  # Ensure annotations are loaded
-    return JSONResponse({
+    return {
         "message": "MongoDB Vector Server MCP",
         "status": "running",
         "available_tools": list_tools_middleware.ALLTOOLS,
         "available_endpoints": [
-            "/health",
             f"/{TOOL_NAME}/health" if TOOL_NAME else None,
             f"/{TOOL_NAME}/mcp" if TOOL_NAME else "/mcp",
-            "/tools_config"
+            "/tools_config",
+            "/vectorize"
         ]
-    })
+    }
 
 # this is for the AWS load balancer health check
 @app.get("/{TOOL_NAME}/health")
 @app.get("/health")
-async def http_health_check():
+async def http_health_check() -> Dict[str, Any]:
     """Regular HTTP GET endpoint for health checks"""
     # always return something or else the load balancer will mark it unhealthy and continue to reload the container
     failed, server_info = await mongo_server.get_mongo_info()
     status_code = 200
     #if failed:
     #    status_code = 500        
-    return JSONResponse(server_info, status_code=status_code)
+    return server_info
 
 @app.get("/tools_config")
-async def http_get_tools_config():
+async def http_get_tools_config() -> Dict[str, Any]:
     """Regular HTTP GET endpoint for health checks"""
     # always return something or else the load balancer will mark it unhealthy and continue to reload the container
     list_tools_middleware.load_annotations()
     results = list_tools_middleware.ALLTOOLS
-    return JSONResponse({"available_tools": results}, status_code=200)
+    return {"available_tools": results}
 
 
 @app.post("/vectorize")
-async def vectorize_text(body: Dict[str, Any]) -> str:
+async def vectorize_text(body: Dict[str, Any]) -> Dict[str, Any]:
     """Dynamic docstring loaded from JSON configuration"""
     try:
         # Extract textChunk from the request body
         text_chunk = body.get("textChunk")
         
         if not text_chunk or not isinstance(text_chunk, str):
-            return json.dumps({
+            return {
                 "error": "textChunk must be a non-empty string in the request body"
-            }, indent=2)
+            }
         
         vector = await mongo_server.generate_embedding(text_chunk)
         logger.info(f"Vectorization successful for input text of length {len(text_chunk)}")
-        return json.dumps({
+        return {
             "input_text": text_chunk,
             "vector": vector
-        }, indent=2)
+        }
         
     except Exception as e:
         logger.error(f"Vectorization failed: {e}")
         traceback.print_exc()
-        return json.dumps({
+        return {
             "error": f"Error executing vectorize_text: {str(e)}"
-        }, indent=2)
+        }
 
 # Mount the MCP server
 app.mount(f"/{TOOL_NAME}", mcp_app)
-#app.mount(f"/", mcp_app)
-
 
 def main():
     """
     Main entry point for the FastMCP server
     python mongo_mcp.py
-
-    For local testing or to bypass this function use fastmcp:
-    fastmcp run mongo_mcp.py --transport sse --port 8001
+    for the container call fastapi directly
+    fastapi run mongo_mcp.py 
+    fastmcp mongo_mcp.py --transport sse --port 8001
     
     """   
     #mcp.run(transport="sse", host="0.0.0.0", port=8001)
-    mcp.run(transport="sse",  port=8001) # this is for local IDE/Cline integration
-    #mcp.run(transport="http", host="0.0.0.0", port=8000) # this is for AWS containers  
+    #mcp.run(transport="sse",  port=8001) # this is for local IDE/Cline integration
+    mcp.run(transport="http", host="0.0.0.0", port=8000) # this is for AWS containers  
 
 
 if __name__ == "__main__":
-    #main()
-    pass
+    main()

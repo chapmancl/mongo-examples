@@ -9,8 +9,6 @@ class AWSSettings:
     def __init__(self):
         self.aws_region = os.getenv('AWS_REGION', 'us-east-2')
         self.mongo_creds = os.getenv('MONGO_CREDS')
-        self.mongo_db = None
-        self.mongo_col = None
         self.EMBEDDING_MODEL_ID = "amazon.titan-embed-text-v2:0"
         self.mcp_config_db = "mcp_config"
         self.mcp_config_col = "mcp_tools"
@@ -55,28 +53,11 @@ class AWSSettings:
         except json.JSONDecodeError as error:
             print(f'Failed to parse secret JSON: {error}')
             raise error
-    
-    def get_mongo_uri(self) -> str:
-        """
-        Get the complete MongoDB connection URI.
-        
-        Returns:
-            MongoDB connection string
-        """
-        credentials = self.get_mongo_credentials()
-        return f"mongodb+srv://{credentials['username']}:{credentials['password']}@{credentials['mongoUri']}"
-    
-    @property
-    def mongo_database(self) -> str:
-        """Get MongoDB database name."""
-        return self.mongo_db
-    
-    @property
-    def mongo_collection(self) -> str:
-        """Get MongoDB collection."""
-        return self.mongo_col
-    
-    @property
+      
+    def mongo_url(self) -> str:
+        """Get MongoDB connection URL."""
+        return self._credentials_cache['mongoUri']
+
     def mongo_timeout(self) -> int:
         """Get MongoDB timeout in milliseconds."""
         return 5000

@@ -308,7 +308,7 @@ resource "kubernetes_ingress_v1" "mcp_search_ingress_default" {
       "alb.ingress.kubernetes.io/listen-ports"    = "[{\"HTTP\": 80}, {\"HTTPS\":443}]"
       "alb.ingress.kubernetes.io/certificate-arn" = var.certificate_arn
       "alb.ingress.kubernetes.io/ssl-policy"      = "ELBSecurityPolicy-TLS13-1-2-Res-2021-06"
-      "alb.ingress.kubernetes.io/actions.multi-forward" = jsonencode({
+      "alb.ingress.kubernetes.io/actions.path-forward" = jsonencode({
         Type = "forward",
         ForwardConfig = {
           TargetGroups = [
@@ -323,6 +323,14 @@ resource "kubernetes_ingress_v1" "mcp_search_ingress_default" {
           }
         }
       })
+      "alb.ingress.kubernetes.io/conditions.path-forward" = jsonencode([
+        {
+          Field = "path-pattern"
+          PathPatternConfig = {
+            Values = ["/", "/tools_config", "/vectorize"]
+          }
+        }
+      ])
     }
   }
 
@@ -330,11 +338,11 @@ resource "kubernetes_ingress_v1" "mcp_search_ingress_default" {
     rule {
       http {
         path {
-          path      = "/"
-          path_type = "Prefix"
+          path      = ""
+          path_type = "ImplementationSpecific"
           backend {
             service {
-              name = "multi-forward"
+              name = "path-forward"
               port {
                 name = "use-annotation"
               }

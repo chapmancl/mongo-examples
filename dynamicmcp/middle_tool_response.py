@@ -4,7 +4,6 @@ import mcp.types as mt
 import logging
 import traceback
 from mongodb_client import MongoDBClient
-from settings_aws import settings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -16,27 +15,23 @@ class ListToolsLoggingMiddleware(Middleware):
         self.tool_name = tool_name
         logger.info("ListToolsLoggingMiddleware initialized")
         self.mongo_client = MongoDBClient()
-        self.mongo_client._db_name = settings.mcp_config_db
-        self.mongo_client._collection_name = settings.mcp_config_col
         self.ANNOTATIONS = None
         self.ALLTOOLS = []
         self.load_annotations()  
         
     def load_annotations(self):
-        """Load tool annotations from the JSON configuration file"""        
+        """Load tool annotations from the JSON out of mongo"""        
         try:
-            self.mongo_client.sync_connect_to_mongodb()
-            doc = self.mongo_client.collection.find_one({"Name": self.tool_name})
-            print(f"Loaded dynamic config for tool {self.tool_name}")       
-            self.ANNOTATIONS = doc
-
-            # load all tools to return configs
-            self.ALLTOOLS = list(self.mongo_client.collection.distinct("Name",{ "active": True}))
-
-            return doc
+            if self.mongo_client.sync_connect_to_mongodb():
+                #print(f"loading dynamic config for tool {self.tool_name}")      
+                # load the config for this specific tool, then we load it for everything so we can return all tools on the shared endpoint 
+                doc = self.mongo_client.collection.find_one({"Name": self.tool_name})    
+                self.ANNOTATIONS = doc
+                # load all tools to return configs
+                self.ALLTOOLS = list(self.mongo_client.collection.distinct("Name",{ "active": True}))
+                return doc
         except Exception as e:
-            logger.error(f"Failed to load annotations: {e}")
-            traceback.print_exc()
+            logger.error(f"Failed to load annotations for tool {self.tool_name}:\r\n {e}")
             return None
 
     # Get tool annotation by name
@@ -50,7 +45,6 @@ class ListToolsLoggingMiddleware(Middleware):
             return tool
         return {}
 
-    # Generate docstring from JSON annotation
     def generate_docstring(self, tool_name: str) -> str:
         """Generate docstring for a tool from JSON annotation"""
         tool_info = self.get_tool_annotation(tool_name)

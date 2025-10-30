@@ -3,10 +3,6 @@ import boto3
 from botocore.exceptions import ClientError
 import re
 import time
-from pymongo import MongoClient
-from pymongo.server_api import ServerApi
-from pymongo.collection import Collection
-from bson.json_util import dumps
 import traceback
 import hashlib
 from typing import Dict, Any, Optional
@@ -62,11 +58,6 @@ class CachedQueryProcessor:
         self.bedrock_client = None
         self._create_bedrock_client()
         
-        # Initialize MongoDB client for vector search
-        self.mongo_client = self._create_mongo_client()
-        # Connect to the MongoDB collection for vectorized data
-        self.collection = self._get_vector_collection()
-        
         self.mcp_client = fastmcp.Client(settings.mong_mcp)
         self.mcp_tools_config = None
         self.mongo_tools = None
@@ -102,13 +93,6 @@ class CachedQueryProcessor:
             region_name=settings.aws_region
         )
     
-    def _create_mongo_client(self) -> MongoClient:
-        return MongoClient(settings.MongoURI, server_api=ServerApi('1'))
-
-    def _get_vector_collection(self) -> Collection:
-        database = self.mongo_client[settings.monogo_database]
-        return database[settings.vector_collection]
-
     def _create_cache_key(self, tool_name: str, tool_input: dict) -> str:
         """Create a deterministic cache key from tool name and input"""
         # Sort the input dict to ensure consistent key generation

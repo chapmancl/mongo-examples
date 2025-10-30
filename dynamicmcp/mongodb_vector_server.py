@@ -9,7 +9,6 @@ import asyncio
 from typing import Any, Dict, List, Tuple
 import logging
 import boto3
-import requests
 from pymongo.errors import PyMongoError
 from mongodb_client import MongoDBClient
 
@@ -25,37 +24,21 @@ class MongoDBVectorServer(MongoDBClient):
         super().__init__()
         self.bedrock_client = boto3.client('bedrock-runtime', region_name=settings.aws_region)
         self.tool_config = None
+        self.tool_name = None
         self.description = "MongoDB Vector Search MCP Server"
     
-    def set_config(self, config: Dict):
-        """Set the tool configuration from a dictionary"""
+    def set_config(self, config: Dict) -> None:
+        """Set the tool configuration from a dictionary. this overrides the default settings"""
         if config is None:
             raise ValueError("Config cannot be None. Check env variables and AWS secrets.")
-        tool_name = config.get("Name", "UnknownTool")
-        print(f"Using settings from tool config {tool_name}")
-        self.tool_config = config
-        self._db_name = self.tool_config["module_info"]['database']
-        self._collection_name = self.tool_config["module_info"]['collection']
-        self.description = self.tool_config["module_info"]['description']
         
-    def get_current_ip(self) -> str:
-        """
-        Get the current public IP address using AWS's checkip service.
-        useful for logging network issues
-        """
-        try:
-            # Make request to AWS checkip service with timeout
-            response = requests.get('https://checkip.amazonaws.com', timeout=10)
-            response.raise_for_status()  # Raise exception for bad status codes
+        self.tool_config = config
+        self.tool_name  = config["Name"]
+        self.description = config["module_info"]["description"]
+        print(f"Using settings from tool config {self.tool_name}")
+        super().set_config(config["module_info"])
             
-            ip_address = response.text.strip()
-            
-            return ip_address
-        except Exception as e:
-            logger.error(f"Error fetching current IP: {e}")
-            return f"Error fetching current IP: {e}"
-            
-    async def get_mongo_info(self) -> Tuple[bool, Dict[str, Any]]:
+    async def get_mongo_info(self, shortResponse=False) -> Tuple[bool, Dict[str, Any]]:
         """
         Retrieve MongoDB connection and collection health information.
         
@@ -75,7 +58,8 @@ class MongoDBVectorServer(MongoDBClient):
         """
         failed = True
         health_status = {
-            "status": "unhealthy",            
+            "status": "unhealthy",
+            "toolname": self.tool_name,        
             "mongodb": {                
                 "database": self._db_name,
                 "collection": self._collection_name
@@ -95,20 +79,23 @@ class MongoDBVectorServer(MongoDBClient):
             
             health_status["mongodb"]["connected"] = is_connected
             if is_connected:
-                # Wait for all tasks to complete concurrently
-                server_info, collection_stats = await asyncio.gather(                
-                    self.client.server_info(),
-                    self.db.command("collStats", self._collection_name)
-                )            
-                
-                health_status["version"] = server_info.get("version", "unknown")
-                health_status["status"] = "healthy"                
-                health_status["mongodb"]["document_count"] = collection_stats.get("count", 0)
-                health_status["mongodb"]["size_bytes"] = collection_stats.get("size", 0)        
+
                 # Convert MongoDB Timestamp object to datetime
                 cluster_time = ping_result["$clusterTime"]["clusterTime"]
-                health_status["mongodb"]["timestamp"] = datetime.datetime.fromtimestamp(cluster_time.time).isoformat()
+                health_status["mongodb"]["timestamp"] = str(datetime.datetime.fromtimestamp(cluster_time.time).isoformat())
+                health_status["status"] = "healthy"                
                 failed = False
+                
+                if not shortResponse:
+                    # Get server info and collection stats
+                    server_info, collection_stats = await asyncio.gather(                
+                        self.client.server_info(),
+                        self.db.command("collStats", self._collection_name)
+                    )   
+                    health_status["version"] = server_info.get("version", "unknown")
+                    health_status["mongodb"]["document_count"] = collection_stats.get("count", 0)
+                    health_status["mongodb"]["size_bytes"] = collection_stats.get("size", 0)        
+                
         except Exception as e:                        
             health_status["error"]= str(e)
             logger.error(f"Health check failed: {e}")
@@ -202,7 +189,7 @@ class MongoDBVectorServer(MongoDBClient):
             results = []
             async for doc in self.collection.aggregate(pipeline):
                 results.append(doc)
-            logger.info(f"Vector search returned {len(results)} results")
+            #logger.info(f"Vector search returned {len(results)} results")
             return results
             
         except PyMongoError as e:
