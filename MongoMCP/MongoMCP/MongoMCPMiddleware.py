@@ -14,8 +14,9 @@ logger = logging.getLogger(__name__)
 
 class MongoMCPMiddleware(Middleware):
     """
-    FastMCP Middleware to intercept and print on_list_tools output
-    middleware is also always connected to the mongo MCP config collection
+    FastMCP Middleware is the central point for connecting to MongoDB config database.
+    handles intercept and print on_list_tools output
+    middleware is always connected to the mongo MCP config collection.
     use this to make core config requests and send logging info to the central MCP config collections
     """
     def __init__(self, tool_name: str, settings):
@@ -56,12 +57,17 @@ class MongoMCPMiddleware(Middleware):
         try:
             header = jwt.get_unverified_header(token)
             api_key = header.get("api_key")
-            #logger.info(f"Checking authorization for token {api_key}")
-
+            
             self.mongo_client.sync_connect_to_mongodb()
             agent_coll = self.mongo_client.get_collection("agent_identities")
             agent_rec = agent_coll.find_one({"agent_key": api_key})
             if agent_rec:
+                # you should hash.... do as I say not as I do.
+                # store the hash private key in secrets manager, then implement hash. 
+                # I think most will come in through a token service which makes this moot.
+                # trying to keep the demo simple, so just verifying the token directly here.
+                # in order to hash I would need a token generator service and I don't want to build that here.
+                # https://fastapi.tiangolo.com/tutorial/security/simple-oauth2/#oauth2passwordrequestform
                 pvk = agent_rec.get("pvk")
                 decoded_payload = jwt.decode(token,pvk, algorithms=["HS256"])
                 agent_rec.pop("pvk")  # remove sensitive info
@@ -83,9 +89,15 @@ class MongoMCPMiddleware(Middleware):
         """local function which outputs JSON from get_tools for internal LLM tool configuration"""    
         try:            
             tools_dict = []
-            for tool_name, tool in mcp_tools.items():
+            for tool_name, tool in mcp_tools.items():                
+                # mcp_tools is important because FastMCP has a lot of helper functions that automate the tools response
+                # I just want the output.
                 if not tool_name in self.ActiveTools:
+                    # the mcp_tools contains all tools, we only want the active ones from our annotations
                     continue                              
+                
+                # Still need to rebuild to match the expected output format
+                # output from this is the expected intput for the LLM tool config
                 props = {}
                 required = []
                 ret_type = "object"
@@ -171,7 +183,7 @@ class MongoMCPMiddleware(Middleware):
         context: MiddlewareContext[mt.ListToolsRequest], 
         call_next: CallNext[mt.ListToolsRequest, List[mt.Tool]]
     ) -> List[mt.Tool]:
-        """Intercept the list_tools call and alter output to match JSON config"""        
+        """Intercept the list_tools call and alter output to match JSON config from mongo mcp_config collection"""        
         try:
             # Call the next middleware or the actual handler
             result = await call_next(context)

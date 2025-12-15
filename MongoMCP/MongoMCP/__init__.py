@@ -1,15 +1,15 @@
 """
 MongoMCP Package
 
-A comprehensive MongoDB MCP (Model Context Protocol) server package providing:
-- MongoDB vector search capabilities
+MongoDB MCP (Model Context Protocol) server package providing:
+- MongoDB search capabilities
 - Authentication and middleware
 - AWS Bedrock LLM integration
 - Configuration management
 
 Main Classes:
-- MongoDBVectorServer: Core vector search functionality
-- MongoMCPMiddleware: Request middleware and tool management
+- MongoDBVectorServer: Core Mongo Query functionality
+- MongoMCPMiddleware: Request middleware, config interactions to/from MongoDB, MCP tool management
 - BedrockClient: AWS Bedrock LLM client
 - MongoTokenVerifier: JWT token authentication
 - MongoDBClient: MongoDB connection management

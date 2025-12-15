@@ -1,10 +1,30 @@
-# Airbnb MCP Client
+# MCP Client
 
-This is a Model Context Protocol (MCP) client that connects to a MongoDB Atlas vector search MCP server and AWS Bedrock to process user queries using Claude LLM with tool support.
+Example Model Context Protocol (MCP) clients that connect to a MongoDB Atlas vector search MCP server and AWS Bedrock to process user queries using Claude LLM with tool support.
 
 ## Available Clients
 
-### 1. `airbnb_mcp_cached.py` - Enhanced Client with Caching (Recommended)
+### 1. `mcp_client.py` - Enhanced Client with Caching (Recommended)
+
+The enhanced client provides caching support, multi-MCP server capabilities, and Token authentication.
+Use this with the MongoMCP server:
+
+**Key Features:**
+- **Multi-MCP Server Support**: Can connect to and use tools from multiple MCP servers simultaneously
+- **Smart Cache Management**: Automatically manages Bedrock's 4 cache block limit
+- **Dynamic Tool Discovery**: Automatically discovers available MCP tools from configured servers
+- **Bearer Token Authentication**: Exmple token system for authenticationg endpoints and MCP tools with clients
+
+**Usage:**
+```bash
+source bin/activate
+aws sso login
+python mcp_client.py
+```
+
+
+
+### 1. `airbnb_mcp_cached.py` - Enhanced Client with Caching (previous version)
 
 The enhanced client provides comprehensive caching support and multi-MCP server capabilities:
 

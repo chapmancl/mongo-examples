@@ -10,6 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
 COPY MongoMCP/ MongoMCP/
+COPY AWS_settings.py .
 COPY mongo_mcp.py .
 COPY health.py .
 

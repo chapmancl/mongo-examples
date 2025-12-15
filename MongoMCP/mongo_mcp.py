@@ -17,9 +17,19 @@ import sys
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+"""
+main component flow:
+1. MongoMCPMiddleware: Connects to MongoDB config database, loads tool configurations, and prep token authorization.
+2. MongoDBVectorServer: Implements core MongoDB query functionalities for the specific tool_name from env
+3. BedrockClient: Handles AWS Bedrock LLM interactions and tool integrations.
+4. instantiate FastMCP server with MongoMCPMiddleware, MongoDBVectorServer, MongoTokenVerifier
+5. instantiate FastAPI app, mounts FastMCP app
+6. define additional endpoints for health checks, tool configuration retrieval, settings reset, LLM invocation, and text vectorization.
+
+"""
+
 TOOL_NAME = os.getenv('MCP_TOOL_NAME')
-failed = False
-error = None
 mongo_middleware: MongoMCPMiddleware
 mongo_server: MongoDBVectorServer
 auth_provider = None
@@ -30,18 +40,17 @@ def setup_from_mongo():
      this will also verify we can connect to mongo before starting the server
      the middleware will be added to the MCP server instance below to intercept tool calls
     """
-    global failed
-    global error
     global mongo_middleware
     global mongo_server
     global auth_provider
-
-    failed = False
-    error = None
     mongo_middleware = None
     mongo_server = None
     auth_provider = None
+    failed = False
+    error = None
 
+    # load or reload the mongo middleware and server config
+    # we do this to get fresh settings from mongo if reset_settings is called
     try:
         mongo_middleware = MongoMCPMiddleware(TOOL_NAME, settings)
         if mongo_middleware.ANNOTATIONS:
@@ -72,6 +81,7 @@ async def upsert_document(
     update: Annotated[Dict, Field(description="Update data for the document.")],
 ) -> Dict[str, Any]:
     """Upsert a document in the specified MongoDB collection."""
+    # TODO: validate write permissions from the token scopes
     try:
         doc_id = await mongo_server.upsert_document(collection, filter, update)
         return {            
@@ -101,7 +111,10 @@ async def vector_search(
         if not query_text or not isinstance(query_text, str):
             return {"error": "query_vector must be a non-empty array of numbers"}
         
-        vector_qry = llm_client.generate_embedding(query_text)  # ensure embedding model is warmed up
+        #TODO: validate collection exists and matches tool config, validate vector index exists on collection
+
+        # incoming input is text, we need a vector for search. Use the LLM client to generate the embedding
+        vector_qry = await llm_client.generate_embedding(query_text)  
         results = await mongo_server.vector_search(collection, vector_qry, filters, limit, num_candidates)
         jobj = json.dumps(results, default=str)  # serialize results to JSON string... sometime results don't auto-serialize well so do it now
         return {
@@ -129,6 +142,8 @@ async def text_search(
         if not query_text:
             return {"error": "query_text is required"}
         
+        #TODO: validate collection exists, validate text search index exists on collection
+
         results = await mongo_server.text_search(collection, query_text, limit)
         jobj = json.dumps(results, default=str) 
         return {
@@ -255,7 +270,11 @@ async def aggregate_query(
         logger.error(f"Unexpected error in aggregate_query: {e}")
         return {"error":f"Unexpected error executing aggregate_query: {str(e)}"}
 
+
+#***********  BEGIN FASTAPI SECTION  ***************
+
 # We have our tools, mount the mcp to fastapi and setup our fastapi authentication
+# everything after this should be FastAPI endpoints.
 mcp_app = mcp.http_app(path=f"/mcp")
 app = FastAPI(title=TOOL_NAME, lifespan=mcp_app.lifespan)
 security_token = HTTPBearer()
@@ -414,29 +433,33 @@ async def invoke_llm(prompt_name: str, body: Dict[str, Any],
         if not context:
             raise ValueError("context must be a non-empty json object in the request body")
         
+        # don't load llm client with tools unless there are prompts available.         
+        # if the prompt changes (on the mongo side), then reset_settings must be called to reload the tool annotations.
+        # this will finish the setup next time an invoke is called.
+        global llm_client
         if not llm_client.llm_setup:
+            # need the mongo middleware annotations first to get the prompts
             mongo_middleware.load_annotations()
+            # this feels circular, but we need to ensure the LLM client is configured with tools, and I didn't want to 
+            # reproduce the tool loading code.
             mcp_tools = await mcp.get_tools()
             tools_config = mongo_middleware.get_llm_tools(mcp_tools)
             llm_client.configure_tools(tools_config, tool_handler)
-        
-                
-        # Lookup prompt from mongo_server.tool_config["prompts"] if it exists
-        prompt = None
+                        
+        # Lookup prompt from mongo_server.tool_config["prompts"] if it exists        
         if ("prompts" in mongo_server.tool_config and 
             prompt_name in mongo_server.tool_config["prompts"]):
+            #We have a prompt!
             prompt = mongo_server.tool_config["prompts"][prompt_name]
-        
-        # Use the prompt if found, otherwise use the context directly
-        if prompt:
             output["prompt"] = prompt
+                        
+            resp_obj = await llm_client.invoke_bedrock_with_tools(prompt, json.dumps(context), 15)
+            output.update(resp_obj)  # merge the response object into output
             
-            # lots of potentail errors and exceptions here, so catch them all. 
+            # lots of potential errors and exceptions here, so catch them all. 
             # tried to pass most through the return, but some may still raise
             # I could not handle all the exceptions by name either, some would raise a runtime exception 
             # instead of passing the exception directly
-            resp_obj = await llm_client.invoke_bedrock_with_tools(prompt, json.dumps(context), 15)
-            output.update(resp_obj)  # merge the response object into output
             return_json = {} 
             if resp_obj.get("error"):
                 return_json = JSONResponse(output, 500)                    
@@ -444,6 +467,8 @@ async def invoke_llm(prompt_name: str, body: Dict[str, Any],
                 logger.info(f"invoke successful for prompt {prompt_name}")
                 return_json = JSONResponse(output, 201)
             
+            # We want to save the full conversation including LLM output regardless of success or failure
+            # Try to handle the exceptions and bubble them up to the output so we don't hit the catches below.
             mongo_middleware.save_llm_conversation(output, agent_rec["agent_key"], TOOL_NAME, prompt_name )
             return return_json
 
@@ -503,9 +528,12 @@ async def vectorize_text(body: Dict[str, Any],
             "body" : input
         }
 
+# we now have all the components and routes. mount the MCP server to FastAPI
 # Mount the MCP server
 app.mount(f"/{TOOL_NAME}", mcp_app)
 
+
+# These are not really used, left them in just in case.
 def main():
     """
     Main entry point for the FastMCP server

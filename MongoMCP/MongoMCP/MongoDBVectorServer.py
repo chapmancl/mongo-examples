@@ -16,6 +16,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class MongoDBVectorServer(MongoDBClient):
+    """
+    MongoDB wrapper class translates MCP Server functions to MongoDB operations.
+    This started as just vector, now has some additional search capabilities.
+    """
     def __init__(self, settings):
         super().__init__(settings=settings)
         self.tool_config = None
@@ -159,8 +163,7 @@ class MongoDBVectorServer(MongoDBClient):
             List of search results with similarity scores
         """
         try:
-            con_task = self.ensure_connection()            
-            con_result, query_vector = await asyncio.gather(con_task, vector_qry)
+            await self.ensure_connection()
 
             # MongoDB Atlas Vector Search aggregation pipeline
             pipeline = [
@@ -168,7 +171,7 @@ class MongoDBVectorServer(MongoDBClient):
                     "$vectorSearch": {
                         "index": self.tool_config['tools']['vector_search']['index'],
                         "path": "embedding", 
-                        "queryVector": query_vector,
+                        "queryVector": vector_qry,
                         "numCandidates": num_candidates,
                         "limit": limit
                     }

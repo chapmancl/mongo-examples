@@ -25,6 +25,10 @@ class DateTimeEncoder(json.JSONEncoder):
 
 
 class BedrockClient():
+    """
+    Bedrock Client for MCP tool calls and LLM invocations
+    Handles the LLM interactions and tool integrations for the LLM.
+    """
     def __init__(self, settings):
         self.settings = settings
         self.bedrock_client = boto3.client('bedrock-runtime', region_name=self.settings.aws_region)

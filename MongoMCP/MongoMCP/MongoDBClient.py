@@ -1,7 +1,3 @@
-"""
-MongoDB Client connection management using settings from settings_aws.py
-"""
-
 import logging
 from typing import Any, Dict, List, Tuple
 from pymongo.errors import PyMongoError
@@ -15,6 +11,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class MongoDBClient:
+    """
+    MongoDB Client connection management using settings from AWS_settings.py
+    defaults to the config database and collection unless overridden by set_config
+    """
     def __init__(self, settings):
         self.db_url = None # set this if we're going to a cluster that is not our default from settings
         self._connection_initialized = False        

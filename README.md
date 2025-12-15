@@ -12,10 +12,10 @@ A Python application that processes MongoDB documents, generates AI embeddings u
 - Batch processing of MongoDB collections
 - Vector storage for similarity search
 
-### [searchmcp/](./searchmcp/)
-**MongoDB Vector Search MCP Server**
+### [MongoMCP/](./MongoMCP/)
+**MongoDB MCP Server**
 
-A Model Context Protocol (MCP) server that provides vector search capabilities for MongoDB Atlas. This server enables semantic search operations on vector embeddings and integrates with AI agents and tools.
+A Model Context Protocol (MCP) server that provides vector search and other capabilities for MongoDB Atlas. This server enables semantic search operations on vector embeddings and integrates with AI agents and tools.
 
 - Vector similarity search using MongoDB `$vectorSearch`
 - Text search with Atlas Search
