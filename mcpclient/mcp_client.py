@@ -10,6 +10,7 @@ import requests
 import asyncio
 import settings
 import fastmcp
+from fastmcp.client.transports import StreamableHttpTransport
 
 class SimpleCache:
     """Simple in-memory cache with TTL support"""
@@ -60,7 +61,7 @@ class CachedQueryProcessor:
         
         self.mcp_client = None
         self.mcp_tools_config = None
-        self.mongo_tools = None
+        self.mongo_tools = None        
         
         # Initialize caching system
         self._init_caches()
@@ -375,17 +376,18 @@ class CachedQueryProcessor:
     async def _discover_multi_mcptools(self) -> dict:
         try:
             root_frmt = f"{settings.mongo_mcp_root}/{{}}/mcp/"
-            self.mcp_tools_config = {
-                "mcpServers": {}
-            }
+            self.mcp_tools_config = { }
             tools = []
             resources = []
 
             for name in self.mongo_tools:
                 print(f"Found MCP server at {name}")
                 endpoint = root_frmt.format(name)
-                self.mcp_tools_config["mcpServers"][name] = {"url": endpoint}
-                
+                self.mcp_tools_config[name] = {
+                    "url": endpoint,
+                    "headers": {"Authorization": f"Bearer {settings.AUTH_TOKEN}"}
+                }
+
             self.mcp_client = fastmcp.Client(self.mcp_tools_config)
             async with self.mcp_client as session:
                 await session.ping()                    
@@ -436,6 +438,7 @@ class CachedQueryProcessor:
             dict: Dictionary containing available tools and their schemas
         """
         try:
+            #self.mcp_client = fastmcp.Client(self.mcp_tools_config)
             async with self.mcp_client as session:
                 print("Pinging MCP server...")
                 await session.ping()
@@ -512,12 +515,14 @@ class CachedQueryProcessor:
 
         return self.mcp_tools_config
 
+
     async def _call_mcp_tool(self, toolname: str, tool_input: dict) -> str:
-        """Initialize a persistent MCP session for tool calls."""
+        """Initialize a stateless session for tool calls."""
         try:
+            #self.mcp_client = fastmcp.Client(self.mcp_tools_config)
             async with self.mcp_client as session:
                 result = await session.call_tool(toolname, tool_input)
-                return result.content[0].text
+            return result.content[0].text
         except Exception as e:
             print(f"Failed MCP {toolname} call: {e}")
             traceback.print_exc()
@@ -561,6 +566,74 @@ class CachedQueryProcessor:
             }
         }
 
+    def _get_clean_input(self, prompt: str = "Question: ") -> str:
+        """Get clean input from user, handling buffer issues and multi-line text"""
+        import sys
+        
+        # Flush any pending output first
+        sys.stdout.flush()
+        sys.stderr.flush()
+        
+        # Clear input buffer by reading any leftover characters
+        if sys.stdin.isatty():  # Only do this for interactive terminals
+            try:
+                import select
+                import tty
+                import termios
+                
+                # Check if there's data waiting in stdin
+                if select.select([sys.stdin], [], [], 0) == ([sys.stdin], [], []):
+                    # Read and discard any leftover input
+                    old_settings = termios.tcgetattr(sys.stdin)
+                    try:
+                        tty.setcbreak(sys.stdin.fileno())
+                        while select.select([sys.stdin], [], [], 0) == ([sys.stdin], [], []):
+                            sys.stdin.read(1)
+                    finally:
+                        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+            except (ImportError, OSError):
+                # Fallback for systems without select/tty/termios
+                pass
+        
+        # Get input and clean it
+        try:
+            user_input = input(prompt).strip()
+            
+            # Handle cases where input might contain multiple lines
+            # If the input seems truncated (no proper ending), prompt for continuation
+            while user_input and not self._is_complete_input(user_input):
+                print("Input appears incomplete. Continue or press Enter to submit:")
+                continuation = input("... ").strip()
+                if not continuation:
+                    break
+                user_input += " " + continuation
+                
+            return user_input
+            
+        except EOFError:
+            # Handle Ctrl+D gracefully
+            raise KeyboardInterrupt
+    
+    def _is_complete_input(self, text: str) -> bool:
+        """Check if input appears to be complete (simple heuristic)"""
+        if not text:
+            return True
+            
+        # Check for common indicators of complete input
+        complete_indicators = ['.', '?', '!', '"', "'", ')', '}', ']']
+        incomplete_indicators = ['(', '{', '[', '"', "'"]
+        
+        # If it ends with a complete indicator, likely complete
+        if text[-1] in complete_indicators:
+            return True
+            
+        # If it ends abruptly mid-word or with incomplete indicators, likely incomplete
+        if text[-1] in incomplete_indicators:
+            return False
+            
+        # Default to complete
+        return True
+
     def run(self) -> None:
         """Runs an interactive loop with caching support"""
         print("Enhanced QueryProcessor with Caching enabled")
@@ -570,10 +643,12 @@ class CachedQueryProcessor:
         print("  cache stats - Show cache statistics")
         print("  cache clear - Clear all caches")
         print("  <question> - Claude query with MCP tool support and caching")
+        print("Note: For multi-line input, the system will detect incomplete input and prompt for continuation.")
         
         try:
             while True:
-                user_input = input("Question: ").strip()
+                # Use the clean input method instead of direct input()
+                user_input = self._get_clean_input("Question: ")
                 answer = "unknown"
                 
                 if not user_input:
@@ -610,6 +685,21 @@ class CachedQueryProcessor:
         except KeyboardInterrupt:
             print("\nKeyboard interrupt received, exiting...")
             print("Final cache stats:", self.get_cache_stats())
+
+    def write_dict_to_json_file(self, data_dict: Dict[str, Any], filename: str) -> None:
+        """
+        Write a Python dictionary to a JSON file
+        
+        Args:
+            data_dict: Dictionary to write to JSON file
+            filename: Path to output JSON file
+        """
+        try:
+            with open(filename, 'w', encoding='utf-8') as f:
+                json.dump(data_dict, f, indent=2, ensure_ascii=False)
+            print(f"Dictionary successfully written to {filename}")
+        except Exception as e:
+            print(f"Error writing dictionary to JSON file: {e}")
 
 def main():    
     processor = CachedQueryProcessor()

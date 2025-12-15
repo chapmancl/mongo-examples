@@ -1,0 +1,13 @@
+fastmcp
+fastapi
+fastapi[standard]
+asyncio-mqtt
+boto3
+pymongo
+motor
+requests
+pydantic
+pyjwt
+mcp
+
+

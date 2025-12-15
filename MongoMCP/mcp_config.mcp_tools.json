@@ -1,0 +1,288 @@
+[{
+  "Name": "AirbnbSearch",
+  "module_info": {
+    "title": "MongoDB Vector Search MCP Server",
+    "description": "provides vector search capabilities using MongoDB's $search. You can search rental listings and build custom queries for data rollups. Use the unique_values tool and search index info from get collection info to dtermine what filters to use. You should always use filters wherever possible. ",
+    "database": "sample_airbnb",
+    "collection": "listingsAndReviews",
+    "url": "<<YOUR MONGODB URL HERE>>"
+  },
+  "tools": {
+    "vector_search": {
+      "description": "Perform semantic vector similarity search on MongoDB collection using AI embeddings. use the collection value as the collection parameter. this tool is only available for the listed collection.\nThis tool converts natural language queries into vector embeddings using Amazon Titan Embeddings v2 and finds semantically similar property listings. It's ideal for finding properties based on meaning and context rather than exact keyword matches.\nyou should use filter arguments, specifically regional filters on address.market and address.country_code with vector_search. use the get unique values tool to determine which regional values to use for address.market and address.country_code. write a custom vector search query for the request.\nyou should structure the query text to remove terms that overlap with specific filters.\nUse cases:\n- \"Find a cozy apartment near Central Park\" (semantic understanding of 'cozy')\n- \"Spacious family home with modern amenities\" (understands family needs)\n- \"Romantic getaway with city views\" (contextual search)",
+      "index": "listing_vector_index",
+      "required": [
+        "query_text",
+        "collection"
+      ],
+      "parameters": {
+        "query_text": {
+          "type": "str",
+          "description": "Natural language query describing desired property characteristics. The text will be automatically converted to a 1024-dimensional vector."
+        },
+        "limit": {
+          "type": "int",
+          "default": 10,
+          "constraints": "ge=1, le=50",
+          "description": "Maximum number of results to return (default: 10, max recommended: 50) Higher values may impact performance."
+        },
+        "num_candidates": {
+          "type": "int",
+          "default": 100,
+          "constraints": "ge=10, le=1000",
+          "description": "Number of candidates to consider during search (default: 100, higher values improve recall but increase latency)"
+        },
+        "filters": {
+          "type": "List",
+          "default": null,
+          "description": "Optional list of filters to narrow search results. Each filter should be a list with [field, value] format. Use filters whenever possible to improve search relevance and performance. Use the get_unique_values tool to discover all available filter values for any field. This should be the primary search tool for most use cases.",
+          "supported_fields": [
+            "bedrooms (integer)",
+            "beds (integer)",
+            "address.country_code (string 2 char country abbreviation)",
+            "address.suburb (neighborhood)",
+            "address.market (city or region)"
+          ],
+          "example_usage": [
+            "[\"beds\", 2], [\"address.country_code\", \"US\"]",
+            "[\"address.market\", \"New York\"]",
+            "[\"address.country_code\", \"CA\"]",
+            "[\"beds\", 3], [\"address.country_code\", \"AU\"]"
+          ]
+        },
+        "collection": {
+          "type": "str",
+          "description": "The name of the collection this query will execute against. this must be the collection value supplied with the tool information."
+        }
+      },
+      "projection": {
+        "embedding": 0,
+        "images": 0,
+        "host": 0,
+        "neighborhood_overview": 0,
+        "space": 0,
+        "transit": 0,
+        "access": 0
+      },
+      "returns": "JSON with results array containing matching properties ranked by semantic similarity, each with a similarity score (0.0-1.0, higher is more similar).",
+      "collection": "listingsAndReviews"
+    },
+    "text_search": {
+      "description": "Perform traditional keyword-based text search on MongoDB collection using Atlas Search. Do not use this tool for semantic searches - use vector_search instead.\n\nThis tool searches for exact keyword matches and full-text indexing with stemming and fuzzy matching. fields include: name, description, summary, amenities, beds, and property_type. Use only for finding properties with specific features or characteristics using precise terms.\n\nUse cases:\n- \"2 bedroom apartment WiFi kitchen\" (exact feature matching)\n- \"Manhattan studio elevator\" (location and amenity search)\n- \"house parking garage 3 beds\" (specific requirements)\n- \"Airbnb Brooklyn\" (location-based search)",
+      "index": "search_index",
+      "fields_searched": [
+        "name",
+        "description",
+        "summary",
+        "amenities",
+        "beds",
+        "property_type"
+      ],
+      "required": [
+        "query_text",
+        "collection"
+      ],
+      "parameters": {
+        "collection": {
+          "type": "str",
+          "description": "The name of the collection this query will execute against. this must be the collection value supplied with the tool information."
+        },
+        "query_text": {
+          "type": "str",
+          "description": "Keywords or phrases to search for. Can include property features, locations, amenities, or any descriptive terms."
+        },
+        "limit": {
+          "type": "int",
+          "default": 10,
+          "constraints": "ge=1, le=100",
+          "description": "Maximum number of results to return (default: 10, max recommended: 100)"
+        }
+      },
+      "projection": {
+        "embedding": 0,
+        "images": 0,
+        "host": 0,
+        "neighborhood_overview": 0,
+        "space": 0,
+        "transit": 0,
+        "access": 0
+      },
+      "returns": "JSON with results array containing matching properties ranked by text relevance, each with a relevance score indicating how well it matches the search terms.",
+      "collection": "listingsAndReviews"
+    },
+    "get_unique_values": {
+      "description": "Get unique values for a specific field in the MongoDB collection. This tool retrieves all unique values for a specified field to determine what filter options are available when using vector_search. Use the get_collection_info tool to see what fields are available in the collection, then use this tool to see what values exist for those filters.",
+      "required": [
+        "field",
+        "collection"
+      ],
+      "parameters": {
+        "collection": {
+          "type": "str",
+          "description": "The name of the collection this query will execute against. This tool can execute against any collection."
+        },
+        "field": {
+          "type": "str",
+          "description": "The field name to get unique values for. Can be nested fields using dot notation (e.g., \"address.market\", \"address.country_code\")."
+        }
+      },
+      "returns": "JSON with unique values array for the specified field, along with count information."
+    },
+    "get_collection_info": {
+      "description": "Get comprehensive information about the MongoDB collection, database statistics, and search capabilities.\n\nThis tool provides essential metadata about the current database connection and collection status, including document counts, storage size, available indexes, and search configuration. Use this tool to understand the current state of the data and search capabilities.",
+      "required": [],
+      "parameters": {},
+      "returns": "JSON containing complete collection metadata including document count, size, indexes, and search configuration details."
+    },
+    "aggregate_query": {
+      "description": "Execute a custom MongoDB aggregation pipeline query on the collection.\n\nThis tool allows you to run complex MongoDB aggregation queries with full flexibility. You can use any MongoDB aggregation stage including $match, $group, $project, $sort, $lookup, $unwind, $addFields, and many others. This is the most powerful tool for complex data analysis and custom queries.",
+      "reference_documentation": "https://www.mongodb.com/docs/manual/reference/mql/aggregation-stages/#std-label-aggregation-pipeline-operator-reference",
+      "required": [
+        "pipeline",
+        "collection"
+      ],
+      "parameters": {
+        "collection": {
+          "type": "str",
+          "description": "The name of the collection this query will execute against. This tool can execute against any collection."
+        },
+        "pipeline": {
+          "type": "List[Dict[str, Any]]",
+          "description": "MongoDB aggregation pipeline as a list of stage objects. Each stage should be a dictionary representing a MongoDB aggregation stage like $match, $group, $project, $sort, etc."
+        },
+        "limit": {
+          "type": "Optional[int]",
+          "default": null,
+          "constraints": "ge=1, le=1000",
+          "description": "Optional limit to apply to the results. If not specified, no limit will be applied. Recommended for large result sets to avoid memory issues."
+        }
+      },
+      "returns": "JSON with results array containing the aggregation results, along with metadata about the query execution including result count and pipeline information."
+    }
+  },
+  "active": true
+},
+{
+  "Name": "MflixSearch",
+  "module_info": {
+    "title": "MongoDB MCP Server for Netflix Movies",
+    "description": "A fastMCP MCP server that provides search capabilities using MongoDB's aggregation pipeline.",
+    "database": "sample_mflix",
+    "collection": "movies",
+    "url": "<<YOUR MONGODB URL HERE>>"
+  },
+  "tools": {
+    "get_unique_values": {
+      "description": "Get unique values for a specific field in the MongoDB collection. This tool retrieves all unique values for a specified field to determine what filter options are available when using vector_search. Use the get_collection_info tool to see what fields are available in the collection, then use this tool to see what values exist for those filters.",
+      "required": [
+        "field",
+        "collection"
+      ],
+      "parameters": {
+        "collection": {
+          "type": "str",
+          "description": "The name of the collection this query will execute against. This tool can execute against any collection."
+        },
+        "field": {
+          "type": "str",
+          "description": "The field name to get unique values for. Can be nested fields using dot notation (e.g., \"address.market\", \"address.country_code\")."
+        }
+      },
+      "returns": "JSON with unique values array for the specified field, along with count information."
+    },
+    "get_collection_info": {
+      "description": "Get comprehensive information about the MongoDB collection, database statistics, and search capabilities.\n\nThis tool provides essential metadata about the current database connection and collection status, including document counts, storage size, available indexes, and search configuration. Use this tool to understand the current state of the data and search capabilities.",
+      "required": [],
+      "parameters": {},
+      "returns": "JSON containing complete collection metadata including document count, size, indexes, and search configuration details."
+    },
+    "aggregate_query": {
+      "description": "Execute a custom MongoDB aggregation pipeline query on the collection.\n\nThis tool allows you to run complex MongoDB aggregation queries with full flexibility. You can use any MongoDB aggregation stage including $match, $group, $project, $sort, $lookup, $unwind, $addFields, and many others. This is the most powerful tool for complex data analysis and custom queries.",
+      "reference_documentation": "https://www.mongodb.com/docs/manual/reference/mql/aggregation-stages/#std-label-aggregation-pipeline-operator-reference",
+      "required": [
+        "pipeline",
+        "collection"
+      ],
+      "parameters": {
+        "collection": {
+          "type": "str",
+          "description": "The name of the collection this query will execute against. This tool can execute against any collection."
+        },
+        "pipeline": {
+          "type": "List[Dict[str, Any]]",
+          "description": "MongoDB aggregation pipeline as a list of stage objects. Each stage should be a dictionary representing a MongoDB aggregation stage like $match, $group, $project, $sort, etc."
+        },
+        "limit": {
+          "type": "Optional[int]",
+          "default": null,
+          "constraints": "ge=1, le=1000",
+          "description": "Optional limit to apply to the results. If not specified, no limit will be applied. Recommended for large result sets to avoid memory issues."
+        }
+      },
+      "returns": "JSON with results array containing the aggregation results, along with metadata about the query execution including result count and pipeline information."
+    }
+  },
+  "active": false
+},
+{
+  "Name": "WeatherSearch",
+  "module_info": {
+    "title": "MongoDB MCP Server for searching historical weather data",
+    "description": "A fastMCP MCP server that provides search capabilities using MongoDB's aggregation pipeline.",
+    "database": "sample_weatherdata",
+    "collection": "data",
+    "url": "<<YOUR MONGODB URL HERE>>"
+  },
+  "tools": {
+    "get_unique_values": {
+      "description": "Get unique values for a specific field in the MongoDB collection. This tool retrieves all unique values for a specified field to determine what filter options are available when using vector_search. Use the get_collection_info tool to see what fields are available in the collection, then use this tool to see what values exist for those filters.",
+      "required": [
+        "field",
+        "collection"
+      ],
+      "parameters": {
+        "collection": {
+          "type": "str",
+          "description": "The name of the collection this query will execute against. This tool can execute against any collection."
+        },
+        "field": {
+          "type": "str",
+          "description": "The field name to get unique values for. Can be nested fields using dot notation."
+        }
+      },
+      "returns": "JSON with unique values array for the specified field, along with count information."
+    },
+    "get_collection_info": {
+      "description": "Get comprehensive information about the MongoDB collection, database statistics, and search capabilities.\n\nThis tool provides essential metadata about the current database connection and collection status, including document counts, storage size, available indexes, and search configuration. Use this tool to understand the current state of the data and search capabilities.",
+      "required": [],
+      "parameters": {},
+      "returns": "JSON containing complete collection metadata including document count, size, indexes, and search configuration details."
+    },
+    "aggregate_query": {
+      "description": "Execute a custom MongoDB aggregation pipeline query on the collection.\n\nThis tool allows you to run complex MongoDB aggregation queries with full flexibility. You can use any MongoDB aggregation stage including $match, $group, $project, $sort, $lookup, $unwind, $addFields, and many others. This is the most powerful tool for complex data analysis and custom queries.",
+      "reference_documentation": "https://www.mongodb.com/docs/manual/reference/mql/aggregation-stages/#std-label-aggregation-pipeline-operator-reference",
+      "required": [
+        "pipeline",
+        "collection"
+      ],
+      "parameters": {
+        "collection": {
+          "type": "str",
+          "description": "The name of the collection this query will execute against. This tool can execute against any collection."
+        },
+        "pipeline": {
+          "type": "List[Dict[str, Any]]",
+          "description": "MongoDB aggregation pipeline as a list of stage objects. Each stage should be a dictionary representing a MongoDB aggregation stage like $match, $group, $project, $sort, etc."
+        },
+        "limit": {
+          "type": "Optional[int]",
+          "default": null,
+          "constraints": "ge=1, le=1000",
+          "description": "Optional limit to apply to the results. If not specified, no limit will be applied. Recommended for large result sets to avoid memory issues."
+        }
+      },
+      "returns": "JSON with results array containing the aggregation results, along with metadata about the query execution including result count and pipeline information."
+    }
+  },
+  "active": false
+}]
