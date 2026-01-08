@@ -128,7 +128,11 @@ class MongoDBVectorServer(MongoDBClient):
             
             search_indexes = []
             async for sidx in self.get_collection(coll).list_search_indexes():
-                search_indexes.append(sidx)
+                indx = sidx
+                # clean up vector index info for readability
+                indx.pop("statusDetail", None)
+                indx.pop("latestDefinitionVersion", None)
+                search_indexes.append(indx)
             
             coll_info = {                                
                 "indexes": [
@@ -137,12 +141,16 @@ class MongoDBVectorServer(MongoDBClient):
                         "key": idx.get("key"),
                         "type": idx.get("type", "standard")
                     } for idx in indexes
-                ],
-                "search_indexes": [
+                ]
+            }
+            
+            # Only add search_indexes field if there are search indexes
+            if search_indexes:
+                coll_info["search_indexes"] = [
                     sidx for sidx in search_indexes
                 ]
-            }        
-            #print(info)
+            
+            # build the collection info structure
             if "collections" not in info["mongodb"]:
                 info["mongodb"]["collections"] = {}
             if coll not in info["mongodb"]["collections"]:

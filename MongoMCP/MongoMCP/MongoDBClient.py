@@ -56,6 +56,7 @@ class MongoDBClient:
    
     async def upsert_document(self, collection_name: str, filter: Dict, update: Dict) -> Any:
         """Update or insert a document in a specified collection"""
+        await self.ensure_connection()
         collection = self.get_collection(collection_name)
         bdoc_filter = self._convert_oid_to_objectid(filter)
         bdoc_update = self._convert_oid_to_objectid(update)
@@ -95,14 +96,18 @@ class MongoDBClient:
 
     def get_collection(self, collection_name: str=None):
         """Get a specific collection by name"""
-        if collection_name is None:
-            collection_name = self._collection_name
-        if collection_name in self.collections:
-            return self.collections[collection_name]
-        else:
-            collection = self.db[collection_name]
-            self.collections[collection_name] = collection
-            return collection
+        try:                    
+            if collection_name is None:
+                collection_name = self._collection_name
+            if collection_name in self.collections:
+                return self.collections[collection_name]
+            else:
+                collection = self.db[collection_name]
+                self.collections[collection_name] = collection
+                return collection
+        except Exception as e:
+            logger.error(f"Error getting collection {collection_name} in {self._db_name} at {self.db_url}: {e}")
+            raise e
     
     async def ensure_connection(self):
         """Ensure MongoDB connection is established"""

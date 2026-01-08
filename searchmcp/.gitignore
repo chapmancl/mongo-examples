@@ -16,3 +16,4 @@ pyvenv.cfg
 
 # Virtual environments
 .venv
+*.tfvars

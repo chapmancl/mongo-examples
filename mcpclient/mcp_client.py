@@ -61,10 +61,17 @@ class CachedQueryProcessor:
         
         self.mcp_client = None
         self.mcp_tools_config = None
-        self.mongo_tools = None        
+        self.mongo_tools = None
+        self.mongo_collection_info = {}
+        self._system_prompt = ""
+        self._headers = {
+            'Authorization': f'Bearer {settings.AUTH_TOKEN}',
+            'Content-Type': 'application/json' 
+        }        
         
         # Initialize caching system
         self._init_caches()
+        self.get_bedrock_tools_from_mcp()
         
     def _init_caches(self):
         """Initialize cache systems with configurable TTLs"""
@@ -86,6 +93,7 @@ class CachedQueryProcessor:
         self._tool_discovery_cache.clear()
         self._tool_response_cache.clear()
         self.mcp_tools_config = None
+        self.get_bedrock_tools_from_mcp()
         print("All caches cleared")
         
     def _create_bedrock_client(self) -> None:
@@ -114,10 +122,9 @@ class CachedQueryProcessor:
         """
         # Get tools dynamically from MCP server discovery (with caching)
         tools = self.get_bedrock_tools_from_mcp()
-        print(f"Using {len(tools)} tools discovered from MCP server")
         
         # Prepare the conversation messages
-        messages = self.history or []
+        messages = self.history
         messages.append({
             "role": "user",
             "content": [{                
@@ -138,6 +145,7 @@ class CachedQueryProcessor:
             try:
                 # Invoke Bedrock using the Converse API
                 response = self.bedrock_client.converse(
+                    system=self._system_prompt,
                     modelId=settings.LLM_MODEL_ID,
                     messages=messages,
                     toolConfig=tool_config
@@ -353,7 +361,7 @@ class CachedQueryProcessor:
 
             # Make web request to tools_url and return dict data
             try:
-                response = requests.get(tools_url)
+                response = requests.get(tools_url, headers=self._headers)
                 response.raise_for_status()
                 jdoc = response.json()
                 available_tools = jdoc.get("available_tools", [])
@@ -374,8 +382,14 @@ class CachedQueryProcessor:
             return {"error": str(e), "tools": []}
     
     async def _discover_multi_mcptools(self) -> dict:
+        """
+        Async method to discover MCP tools from a multiple mcp server endpoints in mongo_tools
+        
+        Returns:
+            dict: Dictionary containing available endpoints, tools, and their schemas
+        """
         try:
-            root_frmt = f"{settings.mongo_mcp_root}/{{}}/mcp/"
+            root_frmt = f"{settings.mongo_mcp_root}/{{}}/mcp"
             self.mcp_tools_config = { }
             tools = []
             resources = []
@@ -387,6 +401,18 @@ class CachedQueryProcessor:
                     "url": endpoint,
                     "headers": {"Authorization": f"Bearer {settings.AUTH_TOKEN}"}
                 }
+                # we're going to call get_collection infor here too so we don't need to have the LLM do it later.
+                self.mongo_collection_info[name] = {}
+                try:
+                    response = requests.get(f"{settings.mongo_mcp_root}/{name}/collection_info", headers=self._headers)
+                    response.raise_for_status()
+                    jdoc = response.json()
+                    collection_info = jdoc.get("collection_info", None)
+                    if collection_info:
+                        self.mongo_collection_info[name] = collection_info
+                except Exception as e:
+                    print(f"Error getting collection info for {name}: {e}")
+                    traceback.print_exc()
 
             self.mcp_client = fastmcp.Client(self.mcp_tools_config)
             async with self.mcp_client as session:
@@ -427,12 +453,13 @@ class CachedQueryProcessor:
             }
         
         except Exception as e:
-            print(f"Failed to discover MCP tools: {e}")                        
+            print(f"Failed to discover MCP tools: {e}")   
+            traceback.print_exc()                     
             return {"error": str(e), "tools": [], "resources": []}
 
     async def _discover_mcp_tools_async(self) -> dict:
         """
-        Async method to discover MCP tools from the server using persistent session
+        Async method to discover MCP tools from a single server using persistent session
         
         Returns:
             dict: Dictionary containing available tools and their schemas
@@ -482,7 +509,8 @@ class CachedQueryProcessor:
                 }
             
         except Exception as e:
-            print(f"Failed to discover MCP tools: {e}")                        
+            print(f"Failed to discover MCP tools: {e}")
+            traceback.print_exc()           
             return {"error": str(e), "tools": [], "resources": []}
     
     def get_bedrock_tools_from_mcp(self) -> list:
@@ -511,7 +539,16 @@ class CachedQueryProcessor:
                     }
                 }
                 bedrock_tools.append(bedrock_tool)
-            self.mcp_tools_config = bedrock_tools
+            
+            if self.mongo_collection_info is not None:
+                self._system_prompt = [
+                    {"text":"***IMPORTANT: always use vector_search before aggregate_query"},
+                    {"text":"Only use vector_search with collections that have a search_indexes.type=vectorSearch."},
+                    {"text": json.dumps(self.mongo_collection_info)}
+                ]
+
+            self.mcp_tools_config = bedrock_tools        
+            print(f"Using {len(bedrock_tools)} tools discovered from MCP server")
 
         return self.mcp_tools_config
 
@@ -703,7 +740,7 @@ class CachedQueryProcessor:
 
 def main():    
     processor = CachedQueryProcessor()
-    processor.query_claude_with_mcp_tools("What collections are available?")
+    processor.query_claude_with_mcp_tools("What is the claim status for nicole weber?")
     processor.run()
 
 if __name__ == "__main__":

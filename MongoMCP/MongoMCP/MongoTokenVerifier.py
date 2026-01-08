@@ -1,5 +1,6 @@
 from fastmcp.server.auth import TokenVerifier
-from mcp.server.auth.provider import AccessToken
+#from mcp.server.auth.provider import AccessToken
+from fastmcp.server.dependencies import AccessToken
 from .MongoMCPMiddleware import MongoMCPMiddleware
 import logging
 

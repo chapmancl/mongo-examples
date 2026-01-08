@@ -1,4 +1,4 @@
-fastmcp
+fastmcp >=2.14
 fastapi
 fastapi[standard]
 asyncio-mqtt

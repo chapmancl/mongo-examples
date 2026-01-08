@@ -6,11 +6,16 @@ import jwt
 import jwt.exceptions
 import datetime
 import logging
+import os
+import json
 import traceback
 from .MongoDBClient import MongoDBClient
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# flag to load only 1 tool when local
+IS_LOCAL = json.loads(os.getenv('IS_LOCAL', 'false').lower())
 
 class MongoMCPMiddleware(Middleware):
     """
@@ -40,8 +45,11 @@ class MongoMCPMiddleware(Middleware):
                 self.ANNOTATIONS = doc
                 self.ActiveTools = self.ANNOTATIONS.get('tools', [])
                 #### load all active tools to return configs
-                self.ALLTOOLS = list(self.mongo_client.get_collection().distinct("Name",{ "active": True}))
-                
+                if IS_LOCAL:
+                    logger.info(f"Running in local mode, loading only the current tool config for {self.tool_name}")
+                else:
+                    self.ALLTOOLS = list(self.mongo_client.get_collection().distinct("Name",{ "active": True}))                
+
                 return doc
         except ConnectionError as ce:
             logger.error(f"MongoDB connection error while loading annotations for tool {self.tool_name}. check IP whitelist, networking etc.:\r\n {ce}")
@@ -213,6 +221,9 @@ class MongoMCPMiddleware(Middleware):
                             elif param_name == "properties":
                                 new_props = {}
                                 for prop in param:
+                                    if prop == "token":
+                                        # token is for internal passing only, ignore it
+                                        continue
                                     try:
                                         new_props[prop] = param[prop]
                                         param_info = anot["parameters"].get(prop, {})

@@ -69,7 +69,7 @@ class BedrockClient():
             return None
         return None
 
-    async def invoke_bedrock_with_tools(self, prompt: str, context: str=None, max_iterations=10 ) -> list:
+    async def invoke_bedrock_with_tools(self, token, prompt: str, context: str=None, max_iterations=10 ) -> list:
         """
         Invoke Bedrock with MCP tools support and caching enabled
         
@@ -151,7 +151,7 @@ class BedrockClient():
                             #print(f"Executing tool:{tool_use_id}-{tool_name} with input: {tool_input}")
                             # Execute the MCP tool call (with caching)
                             try:
-                                tool_result = await self._call_mcp_tool(tool_name, tool_input)
+                                tool_result = await self._call_mcp_tool(token, tool_name, tool_input)
                                 tool_results.append({
                                     "toolResult": {
                                         "toolUseId": tool_use_id,
@@ -215,10 +215,10 @@ class BedrockClient():
         return return_obj
         
 
-    async def _call_mcp_tool(self, toolname: str, tool_input: dict) -> str:
+    async def _call_mcp_tool(self,token, toolname: str, tool_input: dict) -> str:
         """Initialize a stateless session for tool calls."""
         try:
-            result = await self.mcp_call(toolname, tool_input)
+            result = await self.mcp_call(token, toolname, tool_input)
             # Handle the dictionary result from tool_handler function
             if isinstance(result, dict):
                 return json.dumps(result, cls=DateTimeEncoder, indent=2)

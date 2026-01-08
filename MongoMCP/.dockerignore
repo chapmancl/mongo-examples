@@ -46,9 +46,3 @@ poetry.lock
 
 # pytest
 .pytest_cache/
-
-# Environments
-.env
-.venv
-env/
-venv/

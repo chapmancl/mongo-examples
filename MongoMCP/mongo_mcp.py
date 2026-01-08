@@ -7,6 +7,9 @@ from pymongo.errors import PyMongoError
 from fastmcp import FastMCP
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastmcp.dependencies import CurrentContext
+from fastmcp.server.dependencies import AccessToken, get_access_token
+from fastmcp.server.context import Context
 from starlette.responses import JSONResponse
 from AWS_settings import settings
 from MongoMCP import MongoDBVectorServer, MongoMCPMiddleware, BedrockClient, MongoTokenVerifier
@@ -79,9 +82,29 @@ async def upsert_document(
     collection: Annotated[str, Field(description="Name of the MongoDB collection to upsert into.")],
     filter: Annotated[Dict, Field(description="Filter to find the document to update.")],
     update: Annotated[Dict, Field(description="Update data for the document.")],
+    token: Annotated[AccessToken, Depends(get_access_token)] = None
 ) -> Dict[str, Any]:
     """Upsert a document in the specified MongoDB collection."""
-    # TODO: validate write permissions from the token scopes
+    
+    # if it comes in from the mcp tool directly then we have a token object 
+    # otherwise it is a dict from the http endpoint llm_invoke
+    # fastapi and fastmcp handle the dependency injection differently
+    scopes = set()
+    client_id = ""
+    if token is None:
+        token = get_access_token()
+    if isinstance(token, dict):
+        scopes = set(token.get("scope", []))
+        client_id = token.get("agent_key","")            
+    elif token is not None:
+        scopes = set(token.scopes)  
+        client_id = token.client_id        
+
+    # validate write permissions from the token scopes
+    if "write" not in scopes:
+        logger.error(f"Insufficient scope for upsert_document: write permission required for agent {client_id}")
+        return {"error": "Insufficient scope: this agent does not have write permission."}
+
     try:
         doc_id = await mongo_server.upsert_document(collection, filter, update)
         return {            
@@ -278,9 +301,35 @@ async def aggregate_query(
 mcp_app = mcp.http_app(path=f"/mcp")
 app = FastAPI(title=TOOL_NAME, lifespan=mcp_app.lifespan)
 security_token = HTTPBearer()
+optional_token = HTTPBearer(auto_error=False)
+
+def verify_token(credentials: HTTPAuthorizationCredentials) -> Any:
+    (allowed, agent_rec) = mongo_middleware.check_authorization(credentials.credentials)
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return agent_rec
+
+async def get_token(
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(security_token)]
+):
+    return verify_token(credentials)
+
+def verify_optional_token(credentials: Optional[HTTPAuthorizationCredentials]) -> Any:
+    if not credentials:
+        return None
+    return verify_token(credentials)
+
+async def get_optional_token(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(optional_token)]
+):
+    return verify_optional_token(credentials)
 
 # Tool handler function for mapping tool names to functions
-async def tool_handler(toolname: str, tool_input: dict) -> dict:
+async def tool_handler(token: AccessToken, toolname: str, tool_input: dict) -> dict:
     """
     Wrapper function that maps tool names to the appropriate MCP tool functions
     LLM tool use requests will flow through here
@@ -298,7 +347,8 @@ async def tool_handler(toolname: str, tool_input: dict) -> dict:
             return await upsert_document.fn(
                 collection=tool_input.get("collection"),
                 filter=tool_input.get("filter"),
-                update=tool_input.get("update")
+                update=tool_input.get("update"),
+                token=token
             )
         elif toolname == "vector_search":
             return await vector_search.fn(
@@ -336,54 +386,68 @@ async def tool_handler(toolname: str, tool_input: dict) -> dict:
 
 # Root route
 @app.get("/")
-async def root_endpoint() -> Dict[str, Any]:
+async def root_endpoint(token: Annotated[str | None, Depends(get_optional_token)]) -> Dict[str, Any]:
     """Root endpoint"""
-    mongo_middleware.load_annotations()  # Ensure annotations are loaded
-    return {
-        "message": "MongoDB Vector Server MCP",
-        "status": "running",
-        "available_tools": mongo_middleware.ALLTOOLS,
-        "available_endpoints": [
-            f"/{TOOL_NAME}/health" if TOOL_NAME else None,
-            f"/{TOOL_NAME}/mcp" if TOOL_NAME else "/mcp",
-            "/tools_config",
-            "/vectorize"
-        ]
-    }
+    if token:
+        mongo_middleware.load_annotations()  # Ensure annotations are loaded
+        return {
+            "message": "MongoDB Vector Server MCP",
+            "status": "running",
+            "available_tools": mongo_middleware.ALLTOOLS,
+            "available_endpoints": [
+                f"/{TOOL_NAME}/health" if TOOL_NAME else None,
+                f"/{TOOL_NAME}/mcp" if TOOL_NAME else "/mcp",
+                "/tools_config",
+                "/vectorize"
+            ]
+        }
+    else:
+        return {
+            "message": "MongoDB Vector Server MCP",
+            "status": "running"
+        }
 
 # this is for the AWS load balancer health check
-@app.get("/{TOOL_NAME}/health")
+@app.get(f"/{TOOL_NAME}/health")
 @app.get("/health")
-async def http_health_check() -> Dict[str, Any]:
+async def http_health_check(token: Annotated[str | None, Depends(get_optional_token)]) -> Dict[str, Any]:
     """Regular HTTP GET endpoint for health checks"""
-    # always return something or else the load balancer will mark it unhealthy and continue to reload the container
+    # always return something or else the load balancer will mark it unhealthy and continue to reload the container        
     failed, server_info = await mongo_server.get_mongo_info(False)
+    output = server_info.copy()
+    if not token: 
+        # no token, remove sensitive info
+        output.pop("mongodb")
+        output.pop("description")
+        output["connected"] = server_info["mongodb"].get("connected", False)
+        output["timestamp"] = server_info["mongodb"].get("timestamp", "")
+        
     status_code = 200
     #if failed:
     #    status_code = 500        
-    return server_info
+    return output
 
 @app.get("/tools_config")
-async def http_get_tools_config() -> Dict[str, Any]:
-    """Regular HTTP GET endpoint for health checks"""
-    # always return something or else the load balancer will mark it unhealthy and continue to reload the container
+async def http_get_tools_config(token: Annotated[str, Depends(get_token)]) -> Dict[str, Any]:
+    """Regular HTTP GET endpoint for tools config"""
+
+    # list of available active mcp endpoints
     mongo_middleware.load_annotations()
     results = mongo_middleware.ALLTOOLS
-    return {"available_tools": results}
+    return {"available_tools": results, "tool_name": TOOL_NAME}
 
-@app.get("/{TOOL_NAME}/reset")
-async def reset_settings(credentials: HTTPAuthorizationCredentials = Depends(security_token)
-                     ) -> Dict[str, Any]:    
+@app.get(f"/{TOOL_NAME}/collection_info")
+async def http_get_collection_info(token: Annotated[str, Depends(get_token)]) -> Dict[str, Any]:
+    """Regular HTTP GET endpoint for collection info"""        
+    results = await get_collection_info.fn()
+    return {"collection_info": results}
+
+
+@app.get(f"/{TOOL_NAME}/reset")
+async def reset_settings(token: Annotated[str, Depends(get_token)]) -> Dict[str, Any]:    
     """
     reload the settings. this will pull new configs from mongo and update the server with any changes
     """ 
-    (allowed, agent_rec) = mongo_middleware.check_authorization(credentials.credentials)
-    if not allowed:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
     logger.info(f"Begin settings reset for {TOOL_NAME}")
     global llm_client
     llm_client = None
@@ -407,23 +471,18 @@ async def reset_settings(credentials: HTTPAuthorizationCredentials = Depends(sec
 
     return output
 
-@app.post("/{TOOL_NAME}/prompt/{prompt_name}")
+@app.post(f"/{TOOL_NAME}/prompt/{{prompt_name}}")
 async def invoke_llm(prompt_name: str, body: Dict[str, Any], 
-                     credentials: HTTPAuthorizationCredentials = Depends(security_token)
-                     ) -> Dict[str, Any]:    
+                     token: Annotated[str, Depends(get_token)]) -> Dict[str, Any]:    
     """
     Invoke LLM with specified prompt and incoming context. 
     The prompt is looked from and must exist in the MongoDB tool configuration prompts section.
     
-    """ 
-    (allowed, agent_rec) = mongo_middleware.check_authorization(credentials.credentials)
-    if not allowed:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    
+    """     
+    if not "llm:invoke" in token.get("scope", []):
+        logger.error(f"Insufficient scope for invoke_llm: llm:invoke permission required for agent {token["agent_key"]}")
+        raise HTTPException(status_code=403, detail="Insufficient scope")
+
     context = body.get("context")
     output = {        
         "prompt_name": prompt_name,
@@ -453,7 +512,7 @@ async def invoke_llm(prompt_name: str, body: Dict[str, Any],
             prompt = mongo_server.tool_config["prompts"][prompt_name]
             output["prompt"] = prompt
                         
-            resp_obj = await llm_client.invoke_bedrock_with_tools(prompt, json.dumps(context), 15)
+            resp_obj = await llm_client.invoke_bedrock_with_tools(token, prompt, json.dumps(context), 15)
             output.update(resp_obj)  # merge the response object into output
             
             # lots of potential errors and exceptions here, so catch them all. 
@@ -469,7 +528,7 @@ async def invoke_llm(prompt_name: str, body: Dict[str, Any],
             
             # We want to save the full conversation including LLM output regardless of success or failure
             # Try to handle the exceptions and bubble them up to the output so we don't hit the catches below.
-            mongo_middleware.save_llm_conversation(output, agent_rec["agent_key"], TOOL_NAME, prompt_name )
+            mongo_middleware.save_llm_conversation(output, token["agent_key"], TOOL_NAME, prompt_name)
             return return_json
 
         else:            
@@ -488,20 +547,15 @@ async def invoke_llm(prompt_name: str, body: Dict[str, Any],
 
 @app.post("/vectorize")
 async def vectorize_text(body: Dict[str, Any], 
-                     credentials: HTTPAuthorizationCredentials = Depends(security_token)
+                     token: Annotated[str, Depends(get_token)]
                      )  -> Dict[str, Any]:
     """
     API endpoint to vectorize input text using the LLM embedding model.
     this is not an MCP tool
     """
     try:
-        (allowed, agent_rec) = mongo_middleware.check_authorization(credentials.credentials)
-        if not allowed:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid authentication credentials",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+        if not "llm:invoke" in token.get("scope", []):
+            raise HTTPException(status_code=403, detail="Insufficient scope")
 
         # Extract textChunk from the request body
         text_chunk = body.get("textChunk")
