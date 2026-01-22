@@ -2,6 +2,8 @@
 
 Example Model Context Protocol (MCP) clients that connect to a MongoDB Atlas vector search MCP server and AWS Bedrock to process user queries using Claude LLM with tool support.
 
+![MCPClientWorkflow.png](../MCPClientWorkflow.png)
+
 ## Available Clients
 
 ### 1. `mcp_client.py` - Enhanced Client with Caching (Recommended)

@@ -15,6 +15,8 @@ A Python application that processes MongoDB documents, generates AI embeddings u
 ### [MongoMCP/](./MongoMCP/)
 **MongoDB MCP Server**
 
+![AgenticArchitecture.png](AgenticArchitecture.png)
+
 A Model Context Protocol (MCP) server that provides vector search and other capabilities for MongoDB Atlas. This server enables semantic search operations on vector embeddings and integrates with AI agents and tools.
 
 - Vector similarity search using MongoDB `$vectorSearch`
@@ -24,6 +26,8 @@ A Model Context Protocol (MCP) server that provides vector search and other capa
 
 ### [mcpclient/](./mcpclient/)
 **MCP Client with AWS Bedrock Integration**
+
+![MCPClientWorkflow.png](MCPClientWorkflow.png)
 
 An interactive client application that connects to MCP servers and uses AWS Bedrock's Claude LLM for intelligent query processing with tool support.
 

@@ -2,6 +2,8 @@
 
 A highly configurable Model Context Protocol (MCP) server that dynamically loads tool configurations from a MongoDB collection. This server enables flexible, database-driven MCP tool generation for various MongoDB collections and use cases.
 
+![AgenticArchitecture.png](../AgenticArchitecture.png)
+
 ## Features
 
 - **Dynamic Configuration**: MCP server configuration is dynamically loaded from a MongoDB collection, allowing for flexible tool definitions without code changes
