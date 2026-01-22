@@ -34,6 +34,8 @@ A highly configurable Model Context Protocol (MCP) server that dynamically loads
 
 This MCP server dynamically loads its configuration from a MongoDB collection. The configuration defines which tools are available, their parameters, descriptions, and behavior. This allows you to create multiple MCP server configurations for different databases and collections without modifying code.
 
+![AgenticWorkflow.png](../AgenticWorkflow.png)
+
 ### Configuration Collections
 
 Create 3 MongoDB collections:
