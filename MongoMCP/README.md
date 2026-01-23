@@ -356,11 +356,13 @@ CMD ["fastapi", "run", "mongo_mcp.py"]
 ```
 
 Then run the container locally with port mapping:
+MCP_TOOL_NAME must match the "Name" value in the mongo config document.
 
 ```bash
 docker run -p 8000:8000 \
   -e AWS_REGION=your-aws-region \
   -e MONGO_CREDS=your-secret-name \
+  - e MCP_TOOL_NAME=AirbnbSearch
   mongodb-vector-mcp:latest
 ```
 
