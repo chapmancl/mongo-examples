@@ -48,9 +48,9 @@
           "curl -f http://localhost:8080/health || exit 1"
         ],
         "interval": 30,
-        "timeout": 5,
+        "timeout": 15,
         "retries": 3,
-        "startPeriod": 20
+        "startPeriod": 30
       },
       "systemControls": []
     }

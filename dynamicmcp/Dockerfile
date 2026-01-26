@@ -4,6 +4,9 @@ FROM python:3.11-slim
 # Set working directory
 WORKDIR /app
 
+# need curl for health check
+RUN apt-get update && apt-get install -y curl
+
 # Copy requirements and install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -13,7 +16,6 @@ COPY mongodb_vector_server.py .
 COPY mongodb_client.py .
 COPY mongo_mcp.py .
 COPY settings_aws.py .
-COPY health.py .
 COPY middle_tool_response.py .
 
 # Make the script executable
