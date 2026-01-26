@@ -3,6 +3,7 @@ mong_mcp = "http://localhost:8000/mcp/"
 
 # for hosted dynamic mcp server (MongoMCP)
 mongo_mcp_root = "http://localhost:8000"
+AUTH_TOKEN = ""
 
 # AWS settings
 aws_region="us-east-2"

@@ -30,7 +30,7 @@ class MongoMCPMiddleware(Middleware):
         logger.info("MongoMCPMiddleware initialized")
         self.mongo_client = MongoDBClient(settings)
         self.ANNOTATIONS = None
-        self.ALLTOOLS = ["claimsSearch"] #AirbnbSearch
+        self.ALLTOOLS = [tool_name]
         self.ActiveTools = []
         self.load_annotations()  
         
