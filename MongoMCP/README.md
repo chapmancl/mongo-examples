@@ -7,7 +7,6 @@ A highly configurable Model Context Protocol (MCP) server that dynamically loads
 ## Features
 
 - **Dynamic Configuration**: MCP server configuration is dynamically loaded from a MongoDB collection, allowing for flexible tool definitions without code changes
-- **Automatic Tool Generation**: Tool information and metadata are dynamically generated based on JSON configuration documents stored in MongoDB
 - **Vector Search**: Perform semantic similarity search using MongoDB's `$vectorSearch` aggregation pipeline with AI embeddings
 - **Text Search**: Full-text search using MongoDB's `$search` aggregation pipeline with keyword matching
 - **Unique Values Discovery**: Get unique values for any field to discover available filter options
@@ -18,7 +17,7 @@ A highly configurable Model Context Protocol (MCP) server that dynamically loads
 
 ## Prerequisites
 
-- Python 3.11+
+- Python 3.13+
 - MongoDB Atlas cluster with MCP configuration collection
 - MongoDB Atlas cluster with target data collection(s) (optionally with vector search index configured)
 - MCP client 
@@ -28,7 +27,12 @@ A highly configurable Model Context Protocol (MCP) server that dynamically loads
 2. Setup your python environment (see [Python Virtual Environment Setup](#python-virtual-environment-setup))
 3. Install requirements (see [Installation](#installation))
 4. Run fastapi (see [FastAPI Deployment](#fastapi-deployment))
-5. Run the mcp client. (see ../mcpclient/mcp_client.py)
+    a. optionally deploy a container:
+      - locally [docker](#docker-instructions)
+    b. run on AWS:
+      - ECS [Single Container](#pushing-to-amazon-ecr)
+      - EKS [Kubernetes](#kubernetes-deployment-with-terraform)
+5. Run the mcp client. see [mcpclient/mcp_client.py](../mcpclient/mcp_client.py)
 
 ## Dynamic Configuration Setup
 
@@ -38,10 +42,10 @@ This MCP server dynamically loads its configuration from a MongoDB collection. T
 
 ### Configuration Collections
 
-Create 3 MongoDB collections:
+Create 3 MongoDB collections in a new database:
 1. mcp_tools: MCP server configurations. Each document in this collection defines a complete MCP server configuration. see mcp_config.mcp_tools.json
 2. llm_history: save complete conversations with agents from prompts. 
-3. agent_identities: simple toke and agent tracking, see mcp_config.agent_identities.json. you will need to create ids (UUID) and pvk
+3. agent_identities: simple toke and agent tracking, see [mcp_config.agent_identities.json](mcp_config.agent_identities.json). you will need to create ids (UUID) and pvk
   ```bash
   openssl rand -base64 32
   ```
@@ -326,7 +330,7 @@ docker build -t mongodb-vector-mcp .
 ```
 
 ### Pushing to Amazon ECR
-
+Replace `<account-id>` with your AWS account ID.
 1. **Create an ECR repository** (if it doesn't exist):
    ```bash
    aws ecr create-repository --repository-name mongodb-vector-mcp --region your-aws-region
@@ -334,22 +338,25 @@ docker build -t mongodb-vector-mcp .
 
 2. **Get the login token and authenticate Docker to ECR**:
    ```bash
-   aws ecr get-login-password --region your-aws-region | docker login --username AWS --password-stdin <account-id>.dkr.ecr.your-aws-region.amazonaws.com
+   aws ecr get-login-password --region your-aws-region | docker login --username AWS --password-stdin <account-id>.dkr.ecr.<your-aws-region>.amazonaws.com
    ```
 
 3. **Tag the image for ECR**:
    ```bash
-   docker tag mongodb-vector-mcp:latest <account-id>.dkr.ecr.your-aws-region.amazonaws.com/mongodb-vector-mcp:latest
+   docker tag mongodb-vector-mcp:latest <account-id>.dkr.ecr.<your-aws-region>.amazonaws.com/mongodb-vector-mcp:latest
    ```
 
 4. **Push the image to ECR**:
    ```bash
-   docker push <account-id>.dkr.ecr.your-aws-region.amazonaws.com/mongodb-vector-mcp:latest
+   docker push <account-id>.dkr.ecr.<your-aws-region>.amazonaws.com/mongodb-vector-mcp:latest
    ```
 
-Replace `<account-id>` with your AWS account ID.
+5. **Create an ECS Cluster**:
+    a. create the cluster
+    b. use the sample task definition to run the container as a service: [ECS-Service.json](ECS-Service.json)
 
-You can run the server in Docker with FastMCP HTTP transport by with the Dockerfile CMD:
+
+You can run the server in Docker with FastAPI HTTP transport by with the Dockerfile CMD:
 
 ```dockerfile
 CMD ["fastapi", "run", "mongo_mcp.py"]
@@ -362,7 +369,8 @@ MCP_TOOL_NAME must match the "Name" value in the mongo config document.
 docker run -p 8000:8000 \
   -e AWS_REGION=your-aws-region \
   -e MONGO_CREDS=your-secret-name \
-  - e MCP_TOOL_NAME=AirbnbSearch
+  -e MCP_TOOL_NAME=AirbnbSearch \
+  -e IS_LOCAL=true \
   mongodb-vector-mcp:latest
 ```
 

@@ -9,12 +9,12 @@ Example Model Context Protocol (MCP) clients that connect to a MongoDB Atlas vec
 ### 1. `mcp_client.py` - Enhanced Client with Caching (Recommended)
 
 The enhanced client provides caching support, multi-MCP server capabilities, and Token authentication.
-Use this with the MongoMCP server:
+Use this with the [MongoMCP](../MongoMCP) server.
+You will need a matching Auth token in the MCP_Config.agent_identities and the settings.py
 
 **Key Features:**
 - **Multi-MCP Server Support**: Can connect to and use tools from multiple MCP servers simultaneously
-- **Smart Cache Management**: Automatically manages Bedrock's 4 cache block limit
-- **Dynamic Tool Discovery**: Automatically discovers available MCP tools from configured servers
+- **Dynamic Tool Discovery**: Automatically discovers available MCP tools from root endpoint of the MCP deployment
 - **Bearer Token Authentication**: Exmple token system for authenticationg endpoints and MCP tools with clients
 
 **Usage:**
@@ -28,19 +28,17 @@ python mcp_client.py
 
 ### 1. `airbnb_mcp_cached.py` - Enhanced Client with Caching (previous version)
 
-The enhanced client provides comprehensive caching support and multi-MCP server capabilities:
+The enhanced client provides comprehensive caching support and multi-MCP server capabilities.
+Use this with the [dynamicmcp](../dynamicmcp) server.
 
 **Key Features:**
 - **Multi-MCP Server Support**: Can connect to and use tools from multiple MCP servers simultaneously
-- **Advanced Caching System**: Implements multi-level caching including:
+- **Caching System**: Implements multi-level caching including:
   - Bedrock message caching with smart cache point management
   - MCP tool discovery caching
   - Tool response caching with configurable TTL
   - Conversation history caching
 - **Smart Cache Management**: Automatically manages Bedrock's 4 cache block limit
-- **Dynamic Tool Discovery**: Automatically discovers available MCP tools from configured servers
-- **Error Handling**: Robust error handling for AWS and MCP server communications
-- **Performance Optimization**: Reduces API calls and improves response times through intelligent caching
 
 **Usage:**
 ```bash
@@ -56,6 +54,7 @@ python airbnb_mcp_cached.py
 ### 2. `airbnb-mcp.py` - Basic Client
 
 A simpler client implementation without caching features.
+Use this with the [searchmcp](../searchmcp) server.
 
 ## Python Setup Instructions
 
