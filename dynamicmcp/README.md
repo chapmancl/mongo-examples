@@ -5,7 +5,6 @@ A highly configurable Model Context Protocol (MCP) server that dynamically loads
 ## Features
 
 - **Dynamic Configuration**: MCP server configuration is dynamically loaded from a MongoDB collection, allowing for flexible tool definitions without code changes
-- **Automatic Tool Generation**: Tool information and metadata are dynamically generated based on JSON configuration documents stored in MongoDB
 - **Vector Search**: Perform semantic similarity search using MongoDB's `$vectorSearch` aggregation pipeline with AI embeddings
 - **Text Search**: Full-text search using MongoDB's `$search` aggregation pipeline with keyword matching
 - **Unique Values Discovery**: Get unique values for any field to discover available filter options

@@ -24,6 +24,12 @@ A Model Context Protocol (MCP) server that provides vector search and other capa
 - Custom aggregation queries
 - MCP protocol compliance for AI agent integration
 
+**Versions**
+   1. simple, single collection single mcp server: [searchmcp](./searchmcp/)
+   2. dynamic, multi-collection, multiple mcp endpoint: [dyanmicmcp](./dynamicmcp/)
+   1. advanced, multi-collection, multi-cluster, multiple mcp endpoints, agent tokens, prompts, history: [MongoMCP](./MongoMCP/)
+
+
 ### [mcpclient/](./mcpclient/)
 **MCP Client with AWS Bedrock Integration**
 
@@ -45,7 +51,7 @@ An interactive client application that connects to MCP servers and uses AWS Bedr
 
 ## Prerequisites
 
-- Python 3.8 or higher
+- Python 3.11 or higher
 - MongoDB Atlas cluster with sample Airbnb dataset
 - AWS account with Bedrock access
 - Docker (optional, for containerized deployment)

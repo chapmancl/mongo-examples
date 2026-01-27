@@ -329,6 +329,25 @@ Build the Docker image for the MCP server:
 docker build -t mongodb-vector-mcp .
 ```
 
+You can run the server in Docker with FastAPI HTTP transport by with the Dockerfile CMD:
+
+```dockerfile
+CMD ["fastapi", "run", "mongo_mcp.py"]
+```
+
+Then run the container locally with port mapping:
+MCP_TOOL_NAME must match the "Name" value in the mongo config document.
+
+```bash
+docker run -p 8000:8000 \
+  -e AWS_REGION=your-aws-region \
+  -e MONGO_CREDS=your-secret-name \
+  -e MCP_TOOL_NAME=AirbnbSearch \
+  -e IS_LOCAL=true \
+  mongodb-vector-mcp:latest
+```
+
+
 ### Pushing to Amazon ECR
 Replace `<account-id>` with your AWS account ID.
 1. **Create an ECR repository** (if it doesn't exist):
@@ -352,27 +371,9 @@ Replace `<account-id>` with your AWS account ID.
    ```
 
 5. **Create an ECS Cluster**:
-    a. create the cluster
-    b. use the sample task definition to run the container as a service: [ECS-Service.json](ECS-Service.json)
-
-
-You can run the server in Docker with FastAPI HTTP transport by with the Dockerfile CMD:
-
-```dockerfile
-CMD ["fastapi", "run", "mongo_mcp.py"]
-```
-
-Then run the container locally with port mapping:
-MCP_TOOL_NAME must match the "Name" value in the mongo config document.
-
-```bash
-docker run -p 8000:8000 \
-  -e AWS_REGION=your-aws-region \
-  -e MONGO_CREDS=your-secret-name \
-  -e MCP_TOOL_NAME=AirbnbSearch \
-  -e IS_LOCAL=true \
-  mongodb-vector-mcp:latest
-```
+   
+   a. create the cluster
+   b. use the sample task definition to run the container as a service: [ECS-Service.json](ECS-Service.json)
 
 ## Kubernetes Deployment with Terraform
 
@@ -396,8 +397,6 @@ The `main.tf` file provides a complete infrastructure setup including:
 - **Service Discovery**: Kubernetes services and ingress rules for routing
 - **AWS Integration**: IAM roles for Service Account (IRSA) for Secrets Manager access
 - **Health Checks**: Configured health check endpoints for each service
-
-### Configuration Variables
 
 Create a `terraform.tfvars` file based on `terraform.tfvars.example`:
 
@@ -493,7 +492,7 @@ To import the example configurations into your MongoDB collection:
 2. **Using MongoDB CLI (mongoimport)**:
    ```bash
    mongoimport --uri "mongodb+srv://username:password@cluster.mongodb.net/your_config_db" \
-     --collection mcp_configurations \
+     --collection mcp_tools \
      --file mcp_config.mcp_tools.json \
      --jsonArray
    ```
@@ -730,7 +729,7 @@ The server follows the standard MCP protocol and should work with any MCP-compat
 **Connection Issues**: Verify your MongoDB URI and network connectivity
 **Index Errors**: Ensure your vector search index is properly configured
 **Vector Dimension Mismatch**: Check that your query vector dimensions match the index configuration
-**AWS Authentication Issues**: If you encounter the error `Invalid type for parameter SecretId`, this typically indicates an AWS authentication or configuration issue.
+**AWS Authentication Issues**: If you encounter the error `Invalid type for parameter SecretId` or `unable to locate credentials`, this typically indicates an AWS authentication or configuration issue with your aws profile. Additionally double check your AWS Secrets Manager path and region.
 
 
 ## Contributing
