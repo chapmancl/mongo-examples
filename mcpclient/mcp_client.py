@@ -739,8 +739,7 @@ class CachedQueryProcessor:
             print(f"Error writing dictionary to JSON file: {e}")
 
 def main():    
-    processor = CachedQueryProcessor()
-    processor.query_claude_with_mcp_tools("What is the claim status for nicole weber?")
+    processor = CachedQueryProcessor()    
     processor.run()
 
 if __name__ == "__main__":
