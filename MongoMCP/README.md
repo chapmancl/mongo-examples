@@ -27,11 +27,14 @@ A highly configurable Model Context Protocol (MCP) server that dynamically loads
 2. Setup your python environment (see [Python Virtual Environment Setup](#python-virtual-environment-setup))
 3. Install requirements (see [Installation](#installation))
 4. Run fastapi (see [FastAPI Deployment](#fastapi-deployment))
+    
     a. optionally deploy a container:
       - locally [docker](#docker-instructions)
+    
     b. run on AWS:
       - ECS [Single Container](#pushing-to-amazon-ecr)
       - EKS [Kubernetes](#kubernetes-deployment-with-terraform)
+      
 5. Run the mcp client. see [mcpclient/mcp_client.py](../mcpclient/mcp_client.py)
 
 ## Dynamic Configuration Setup
