@@ -373,18 +373,19 @@ Replace `<account-id>` with your AWS account ID.
 5. **Create an ECS Cluster**:
    
    a. create the cluster
+
    b. use the sample task definition to run the container as a service: [ECS-Service.json](ECS-Service.json)
 
 ## Kubernetes Deployment with Terraform
 
-This project includes Terraform configuration for deploying the MCP server to Amazon EKS (Elastic Kubernetes Service). The Terraform deployment creates multiple MCP services based on different MongoDB configurations. see ../dynamicmcp for example terraform files.
+This project includes Terraform configuration for deploying the MCP server to Amazon EKS (Elastic Kubernetes Service). The Terraform deployment creates multiple MCP services based on different MongoDB configurations. see [dynamicmcp](../dynamicmcp) for example terraform files.
 
 ### Prerequisites for Kubernetes Deployment
 
 - AWS CLI configured with appropriate permissions
 - Terraform installed (version 1.0+)
 - An existing EKS cluster
-- AWS Load Balancer Controller installed in your EKS cluster
+- AWS Load Balancer Controller installed in your EKS cluster [ALB instructions](https://docs.aws.amazon.com/eks/latest/userguide/aws-load-balancer-controller.html)
 - IAM role for Service Account (IRSA) configured for accessing AWS Secrets Manager
 - SSL certificate in AWS Certificate Manager (optional, for HTTPS)
 
@@ -393,7 +394,7 @@ This project includes Terraform configuration for deploying the MCP server to Am
 The `main.tf` file provides a complete infrastructure setup including:
 
 - **Multiple Service Deployment**: Deploy multiple MCP server instances with different configurations
-- **Load Balancing**: AWS Application Load Balancer with SSL termination
+- **Load Balancing**: AWS Application Load Balancer with SSL termination 
 - **Service Discovery**: Kubernetes services and ingress rules for routing
 - **AWS Integration**: IAM roles for Service Account (IRSA) for Secrets Manager access
 - **Health Checks**: Configured health check endpoints for each service
