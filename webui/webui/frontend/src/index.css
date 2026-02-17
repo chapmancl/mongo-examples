@@ -1,0 +1,13 @@
+body {
+  margin: 0;
+  padding: 0;
+  background: #f7f7f7;
+}
+
+textarea {
+  font-family: inherit;
+}
+
+button {
+  padding: 8px 12px;
+}
