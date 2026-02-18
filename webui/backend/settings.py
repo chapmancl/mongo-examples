@@ -1,6 +1,5 @@
 # for hosted dynamic mcp server (MongoMCP)
-mongo_mcp_root = "local"
-
+mongo_mcp_root = "http://localhost:8000"
 AUTH_TOKEN = ""
 
 
