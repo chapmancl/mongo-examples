@@ -4,7 +4,7 @@ This folder contains a minimal Flask backend (proxy + static serve) and a Vite R
 
 Getting started (development):
 
-1. Start the Flask proxy (optional, provides `/query` that forwards to FastAPI):
+1. Start the Flask proxy (optional, provides `/query` that forwards to frontend):
 
 ```bash
 python -m pip install -r webui/backend/requirements.txt
@@ -37,3 +37,4 @@ npm run build
 # then serve the built files with the Flask backend
 python webui/backend/app.py
 ```
+
