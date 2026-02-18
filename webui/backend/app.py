@@ -3,11 +3,11 @@ from flask import Flask, send_from_directory, request, jsonify, abort, Response
 from flask_cors import CORS
 import requests
 import settings
-from mcp_processor import APIQueryProcessor
+from mcp_processor import APIQueryProcessor, QueryResponse, QueryRequest
 import mimetypes
 import traceback
 from typing import Optional, List, Any
-from pydantic import BaseModel
+import threading
 import json
 
 mimetypes.add_type('application/javascript', '.js')
@@ -18,34 +18,10 @@ CORS(app)
 MCP_CLUSTER_ROOT = settings.mongo_mcp_root
 processor = APIQueryProcessor()
 
-
-def _sanitize_obj(o):
-    """Recursively remove newline characters from string fields in an object."""
-    if isinstance(o, dict):
-        return {k: _sanitize_obj(v) for k, v in o.items()}
-    if isinstance(o, list):
-        return [_sanitize_obj(v) for v in o]
-    if isinstance(o, str):
-        return o.replace('\\n', '').replace('\\r', '')
-    return o
-
-
-class QueryRequest(BaseModel):
-    input: str
-    history: Optional[List[Any]] = None
-
-
-class QueryResponse(BaseModel):
-    answer: Optional[str] = None
-    history: Optional[List[Any]] = None
-    cache_stats: Optional[dict] = None
-    message: Optional[str] = None
-
-
-
 @app.route('/query', methods=['POST'])
 def api_query():
     resp = '{"status": "error", "message": "Unknown error"}'  # Default error response
+    code = 500
     try:
         payload = request.get_json(force=True)
         
@@ -55,35 +31,31 @@ def api_query():
         q = (payload.get("input", "") or "").strip()
         if not q:
             raise ValueError("Empty input")
-    
-        try:
-            # Mirror CLI commands
-            if q.startswith("clear"):
-                processor.clear_history()
-                processor.clear_all_caches()
-                return QueryResponse(message="History and caches cleared", history=processor.get_history())
 
-            if q.startswith("cache stats"):
-                stats = processor.get_cache_stats()
-                return QueryResponse(cache_stats=stats, history=processor.get_history())
+        req = QueryRequest(input=q, history=payload.get("history", []))  # Validate input with Pydantic model
+        # Mirror CLI commands
+        if q.startswith("clear"):
+            processor.clear_history()
+            resp = processor.clear_all_caches().json()
+            code = 205
 
-            if q.startswith("cache clear"):
-                processor.clear_all_caches()
-                return QueryResponse(message="All caches cleared", history=processor.get_history())
+        elif q.startswith("cache stats"):
+            resp = processor.get_cache_stats().json() 
+            code = 200
 
+        elif q.startswith("cache clear"):
+            resp = processor.clear_all_caches().json()
+            code = 200
+        else:
             # Normal question => forward to Claude/Bedrock with MCP tools
-            answer, history = processor.query_claude_with_mcp_tools(q, payload.get("history", []))
-            resp = QueryResponse(answer=answer, history=history)
+            resp = processor.query_claude_with_mcp_tools(req).json()    
+            code = 200
 
-        except Exception as e:
-            traceback.print_exc()
-            raise        
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        traceback.print_exc()
+        resp = QueryResponse(status="Error", error=str(e)).json()
     
-    return jsonify(resp.dict()), 200
-
-
+    return jsonify(resp), code
 
 
 @app.route('/query/stream', methods=['POST'])
@@ -100,55 +72,85 @@ def stream_query():
 def generate(payload):
     try:
         if processor.init_error:
-            yield json.dumps(_sanitize_obj({'error': f"Processor initialization failed: {processor.init_error}"})) + '\n'
+            yield QueryResponse(error=f"Processor initialization failed: {processor.init_error}").json() + '\n'
             return
 
         q = (payload.get("input", "") or "").strip()
         if not q:
-            yield json.dumps(_sanitize_obj({'error': "Empty input"})) + '\n'
+            yield QueryResponse(status="Error", error="Empty input").json() + '\n'
             return
 
-        # Yield status update
-        yield json.dumps(_sanitize_obj({'status': 'processing', 'message': f'Processing: {q}'})) + '\n'
-
-        try:
-            # Mirror CLI commands
-            if q.startswith("clear"):
-                processor.clear_history()
-                processor.clear_all_caches()
-                result = QueryResponse(message="History and caches cleared", history=processor.get_history())
-                yield json.dumps(_sanitize_obj(result.dict())) + '\n'
-                return
-
-            if q.startswith("cache stats"):
-                stats = processor.get_cache_stats()
-                result = QueryResponse(cache_stats=stats, history=processor.get_history())
-                yield json.dumps(_sanitize_obj(result.dict())) + '\n'
-                return
-
-            if q.startswith("cache clear"):
-                processor.clear_all_caches()
-                result = QueryResponse(message="All caches cleared", history=processor.get_history())
-                yield json.dumps(_sanitize_obj(result.dict())) + '\n'
-                return
-
+        # Generic threaded executor - returns (result, exception)
+        def execute_in_thread(func):
+            """Execute a function in a background thread and stream messages."""
+            result = [None]
+            exception = [None]
+            
+            def wrapper():
+                try:
+                    result[0] = func()
+                except Exception as e:
+                    exception[0] = e
+            
+            thread = threading.Thread(target=wrapper, daemon=True)
+            thread.start()
+            
+            # Stream messages as they arrive from the handler
+            while thread.is_alive():
+                for msg in processor.read_message_stream(timeout=0.1):
+                    yield msg + '\n'
+            
+            # Drain any remaining messages after thread completes
+            for msg in processor.pop_queued_messages():
+                yield msg + '\n'
+            
+            # Yield the final result and exception as a tuple
+            yield (result[0], exception[0])
+        
+        result = None
+        exception = None
+        
+        # Mirror CLI commands
+        if q.startswith("clear"):
+            processor.clear_history()
+            for item in execute_in_thread(processor.clear_all_caches):
+                if isinstance(item, tuple):
+                    result, exception = item
+                else:
+                    yield item
+        elif q.startswith("cache stats"):
+            for item in execute_in_thread(processor.get_cache_stats):
+                if isinstance(item, tuple):
+                    result, exception = item
+                else:
+                    yield item
+        elif q.startswith("cache clear"):
+            for item in execute_in_thread(processor.clear_all_caches):
+                if isinstance(item, tuple):
+                    result, exception = item
+                else:
+                    yield item
+        else:
             # Yield progress update
-            yield json.dumps(_sanitize_obj({'status': 'querying', 'message': 'Querying Claude with MCP tools...'})) + '\n'
+            yield QueryResponse(status='querying', message='Querying Claude with MCP tools...').json() + '\n'
 
-            # Normal question => forward to Claude/Bedrock with MCP tools
-            answer, history = processor.query_claude_with_mcp_tools(q, payload.get("history", []))
-            result = QueryResponse(answer=answer, history=history)
-
-            # Yield final result
-            yield json.dumps(_sanitize_obj(result.dict())) + '\n'
-
-        except Exception as e:
-            traceback.print_exc()
-            yield json.dumps(_sanitize_obj({'error': str(e)})) + '\n'
+            # Run the query in a background thread to allow concurrent message streaming
+            req = QueryRequest(input=q, history=payload.get("history", []))
+            for item in execute_in_thread(lambda: processor.query_claude_with_mcp_tools(req)):
+                if isinstance(item, tuple):
+                    result, exception = item
+                else:
+                    yield item
+        
+        # Yield final result
+        if exception:
+            yield QueryResponse(error=str(exception)).json() + '\n'
+        elif result:
+            yield result.json() + '\n'
 
     except Exception as e:
         traceback.print_exc()
-        yield json.dumps(_sanitize_obj({'error': str(e)})) + '\n'
+        yield QueryResponse(error=str(e)).json() + '\n'
 
 
 

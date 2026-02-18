@@ -63,17 +63,14 @@ export default function App() {
               if (obj.status !== undefined) setStatus(obj.status)
               if (obj.message !== undefined) setLiveMessage(String(obj.message))
 
-              // Only show status/message/answer in the live output
-              const liveParts = []
-              //if (obj.status !== undefined) liveParts.push(String(obj.status))
-              if (obj.message !== undefined) liveParts.push(String(obj.message))
+              // Show answer in separate section (not in live output)
               if (obj.answer !== undefined) {
-                liveParts.push(String(obj.answer))
                 setAnswer(obj.answer)
               }
 
-              if (liveParts.length) {
-                setStreamedOutput((prev) => (prev ? prev + '\n' : '') + liveParts.join(' '))
+              // Only accumulate messages in live output, not answers
+              if (obj.message !== undefined) {
+                setStreamedOutput((prev) => (prev ? prev + '\n' : '') + String(obj.message))
               }
             } catch (e) {
               // Non-JSON line — append raw
@@ -89,10 +86,9 @@ export default function App() {
             if (data.history !== undefined) setHistory(data.history)
             if (data.answer !== undefined) setAnswer(data.answer)
             if (data.status !== undefined) setStatus(data.status)
-            //if (data.message !== undefined) setLiveMessage(String(data.message))
-            const liveParts = []
-            if (data.message !== undefined) liveParts.push(String(data.message))
-            if (liveParts.length) setStreamedOutput((prev) => (prev ? prev + '\n' : '') + liveParts.join(' '))
+            if (data.message !== undefined) {
+              setStreamedOutput((prev) => (prev ? prev + '\n' : '') + String(data.message))
+            }
           } catch {
             setStreamedOutput((prev) => prev + buf)
             setAnswer(buf)
@@ -163,9 +159,6 @@ export default function App() {
             <div style={{ minWidth: 180, backgroundColor: '#fff', padding: 10, borderRadius: 6, border: '1px solid #eee' }}>
               <strong>Status</strong>
               <div style={{ marginTop: 6, fontSize: 14 }}>{status ?? '—'}</div>
-              {liveMessage ? (
-                <div style={{ marginTop: 8, color: '#333', whiteSpace: 'pre-wrap' }}>{liveMessage}</div>
-              ) : null}
             </div>
 
             <div style={{ flex: 1, backgroundColor: '#f0f0f0', padding: 8, borderRadius: 4 }}>

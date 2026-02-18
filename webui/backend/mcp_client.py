@@ -11,25 +11,30 @@ import asyncio
 import settings
 import fastmcp
 from fastmcp.client.transports import StreamableHttpTransport
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 class SimpleCache:
     """Simple in-memory cache with TTL support"""
     def __init__(self, default_ttl=300):
         self._cache = {}
         self._default_ttl = default_ttl
+        self._lock = threading.Lock()  # Prevent race conditions in multi-threaded context
     
     def get(self, key: str):
-        if key in self._cache:
-            data, timestamp, ttl = self._cache[key]
-            if time.time() - timestamp < ttl:
-                return data
-            else:
-                del self._cache[key]
-        return None
+        with self._lock:
+            if key in self._cache:
+                data, timestamp, ttl = self._cache[key]
+                if time.time() - timestamp < ttl:
+                    return data
+                else:
+                    del self._cache[key]
+            return None
     
     def set(self, key: str, value: Any, ttl: int = None):
         ttl = ttl or self._default_ttl
-        self._cache[key] = (value, time.time(), ttl)
+        with self._lock:
+            self._cache[key] = (value, time.time(), ttl)
     
     def clear(self):
         self._cache.clear()
@@ -54,7 +59,7 @@ class CachedQueryProcessor:
         """Initializes the CachedQueryProcessor with caching configuration"""
         # Conversation history (starts empty)
         self.history = None
-        
+        self.message_handler = self._handle_message
         # AWS session objects
         self.bedrock_client = None
         self._create_bedrock_client()
@@ -72,6 +77,17 @@ class CachedQueryProcessor:
         # Initialize caching system
         self._init_caches()
         self.get_bedrock_tools_from_mcp()
+    
+    async def async_message_handler(self, message):
+        return await asyncio.to_thread(self.message_handler, message)
+    
+    def _handle_message(self, message):
+        """Handle incoming messages from the server."""
+        if isinstance(message, Exception):
+            print(f"Error in message handler: {message}")
+            return    
+        print(message)
+    
         
     def _init_caches(self):
         """Initialize cache systems with configurable TTLs"""
@@ -94,7 +110,7 @@ class CachedQueryProcessor:
         self._tool_response_cache.clear()
         self.mcp_tools_config = None
         self.get_bedrock_tools_from_mcp()
-        print("All caches cleared")
+        self.message_handler("All caches cleared")
         
     def _create_bedrock_client(self) -> None:
         self.bedrock_client = boto3.client(
@@ -144,6 +160,7 @@ class CachedQueryProcessor:
         for iteration in range(max_iterations):
             try:
                 # Invoke Bedrock using the Converse API
+                self.message_handler(f"Invoking Bedrock (iteration {iteration + 1})")  
                 response = self.bedrock_client.converse(
                     system=self._system_prompt,
                     modelId=settings.LLM_MODEL_ID,
@@ -155,10 +172,10 @@ class CachedQueryProcessor:
                 assistant_message = response['output']['message']
                 
                 # Display LLM reasoning
-                #if assistant_message.get("content"):
-                #    for content in assistant_message["content"]:
-                #        if content.get("text"):
-                #            print(f"LLM: {content['text']}")
+                if assistant_message.get("content"):
+                    for content in assistant_message["content"]:
+                        if content.get("text"):
+                            self.message_handler(f"LLM: {content['text'][0:50]}...")  # Show a preview of the response
                 
                 messages.append(assistant_message)
                 
@@ -200,7 +217,7 @@ class CachedQueryProcessor:
                                         "status": "error"
                                     }
                                 })
-                        
+
                         # Add tool results to the conversation
                         if tool_results:
                             tool_message = {"role": "user", "content": tool_results}
@@ -270,8 +287,8 @@ class CachedQueryProcessor:
                 message['content'].append(cache_point.copy())
                 cache_points_added += 1
         
-        #if cache_points_added > 0:
-        #    print(f"Added {cache_points_added} cache points to conversation")
+        if cache_points_added > 0:
+            self.message_handler(f"Added {cache_points_added} cache points to conversation")
 
     def _execute_mcp_tool_cached(self, tool_name: str, tool_input: dict) -> str:
         """
@@ -294,12 +311,12 @@ class CachedQueryProcessor:
         # Try to get from cache first
         cached_result = self._tool_response_cache.get(cache_key)
         if cached_result is not None:
-            #print(f"Using cached response for {tool_name}")
+            self.message_handler(f"Using cached response for {tool_name}")
             return cached_result
         
         # Cache miss - execute the tool
         try:
-            #print(f"Executing MCP tool: {tool_name} with args: {tool_input}")
+            self.message_handler(f"Executing MCP tool: {tool_name} with args: {tool_input}")
             result = self._execute_mcp_tool_direct(tool_name, tool_input)
             
             # Cache the result
@@ -314,13 +331,6 @@ class CachedQueryProcessor:
         """Execute MCP tool without caching"""
         return asyncio.run(self._call_mcp_tool(tool_name, tool_input))
 
-    async def message_handler(self, message):
-        """Handle incoming messages from the server."""
-        if isinstance(message, Exception):
-            print(f"Error in message handler: {message}")
-            return    
-        #print(f"Received message from server: {message}")
-    
     def discover_mcp_tools(self) -> dict:
         """
         Discover available MCP tools from the server with caching
@@ -337,7 +347,7 @@ class CachedQueryProcessor:
         # Try to get from cache first
         cached_tools = self._tool_discovery_cache.get(cache_key)
         if cached_tools is not None:
-            #print("Using cached MCP tools discovery")
+            self.message_handler("Using cached MCP tools discovery")
             return cached_tools
         
         # Cache miss - discover tools
@@ -349,7 +359,7 @@ class CachedQueryProcessor:
             
             return tools_data
         except Exception as e:
-            print(f"Error discovering MCP tools: {e}")
+            self.message_handler(f"Error discovering MCP tools: {e}")
             return {"error": str(e), "tools": []}
 
     def _discover_mcp_tools_direct(self) -> dict:
@@ -357,7 +367,7 @@ class CachedQueryProcessor:
         try:
             #call the root url and get the available tools
             tools_url = f"{settings.mongo_mcp_root}/"
-            #print(f"Discovering MCP tools from {tools_url}")
+            self.message_handler(f"Discovering MCP tools from {tools_url}")
 
             # Make web request to tools_url and return dict data
             try:
@@ -369,7 +379,7 @@ class CachedQueryProcessor:
                 #print(available_tools)
                 
             except requests.RequestException as e:
-                print(f"Error making web request to {tools_url}: {e}")
+                self.message_handler(f"Error making web request to {tools_url}: {e}")
                 #return {"error": str(e), "tools": [], "resources": []}
 
             if self.mongo_tools:
@@ -378,7 +388,7 @@ class CachedQueryProcessor:
                 return asyncio.run(self._discover_mcp_tools_async())
             
         except Exception as e:
-            print(f"Error discovering MCP tools: {e}")
+            self.message_handler(f"Error discovering MCP tools: {e}")
             return {"error": str(e), "tools": []}
     
     async def _discover_multi_mcptools(self) -> dict:
@@ -411,7 +421,7 @@ class CachedQueryProcessor:
                     if collection_info:
                         self.mongo_collection_info[name] = collection_info
                 except Exception as e:
-                    print(f"Error getting collection info for {name}: {e}")
+                    await self.async_message_handler(f"Error getting collection info for {name}: {e}")
                     traceback.print_exc()
 
             self.mcp_client = fastmcp.Client(self.mcp_tools_config)
@@ -419,7 +429,7 @@ class CachedQueryProcessor:
                 await session.ping()                    
                 try:
                     tools_response = await session.list_tools()     
-                    #print(f"Discovered {len(tools_response)} tools from MCP server at {self.mongo_tools}")
+                    await self.async_message_handler(f"Discovered {len(tools_response)} tools from MCP server at {self.mongo_tools}")
                     for t in tools_response:
                         tools.append({
                             "name": f"{t.name}",
@@ -429,7 +439,7 @@ class CachedQueryProcessor:
                         })
                     
                 except Exception as e:
-                    print(f"Error listing tools: {e}")
+                    await self.async_message_handler(f"Error listing tools: {e}")
                     traceback.print_exc()
                 
                 # List available resources                     
@@ -445,7 +455,7 @@ class CachedQueryProcessor:
                         for resource in resources_response
                     ])
                 except Exception as e:
-                    print(f"Error listing resources: {e}")
+                    await self.async_message_handler(f"Error listing resources: {e}")
                     
             return {
                 "tools": tools,
@@ -453,7 +463,7 @@ class CachedQueryProcessor:
             }
         
         except Exception as e:
-            print(f"Failed to discover MCP tools: {e}")   
+            await self.async_message_handler(f"Failed to discover MCP tools: {e}")   
             traceback.print_exc()                     
             return {"error": str(e), "tools": [], "resources": []}
 
@@ -476,7 +486,7 @@ class CachedQueryProcessor:
                 try:
                     tools_response = await session.list_tools()     
                     
-                    #print(f"Discovered {len(tools_response)} tools from MCP server")
+                    await self.async_message_handler(f"Discovered {len(tools_response)} tools from MCP server")
                     for t in tools_response:
                         tools.append({
                             "name": t.name,
@@ -485,7 +495,7 @@ class CachedQueryProcessor:
                             "annotation": t.annotations
                         })                    
                 except Exception as e:
-                    print(f"Error listing tools: {e}")
+                    await self.async_message_handler(f"Error listing tools: {e}")
                 
                 # List available resources 
                 resources = []
@@ -509,7 +519,7 @@ class CachedQueryProcessor:
                 }
             
         except Exception as e:
-            print(f"Failed to discover MCP tools: {e}")
+            await self.async_message_handler(f"Failed to discover MCP tools: {e}")
             traceback.print_exc()           
             return {"error": str(e), "tools": [], "resources": []}
     
@@ -525,8 +535,8 @@ class CachedQueryProcessor:
             bedrock_tools = []
             
             if "error" in mcp_info:
-                print(f"MCP discovery failed {mcp_info['error']}")
-                print(mcp_info)                
+                self.message_handler(f"MCP discovery failed {mcp_info['error']}")
+                self.message_handler(str(mcp_info))                
 
             for tool in mcp_info.get("tools", []):
                 bedrock_tool = {
@@ -543,13 +553,13 @@ class CachedQueryProcessor:
             if self.mongo_collection_info is not None:
                 self._system_prompt = [
                     {"text":"***IMPORTANT: always use vector_search before aggregate_query"},
-                    {"text":"***IMPORTANT: All output should be HTML formatted for display in a web UI"},
+                    {"text":"***IMPORTANT: All output should be Markdown formatted for display in a web UI"},
                     {"text":"Only use vector_search with collections that have a search_indexes.type=vectorSearch."},
                     {"text": json.dumps(self.mongo_collection_info)}
                 ]
 
             self.mcp_tools_config = bedrock_tools        
-            #print(f"Using {len(bedrock_tools)} tools discovered from MCP server")
+            self.message_handler(f"Using {len(bedrock_tools)} tools discovered from MCP server")
 
         return self.mcp_tools_config
 
@@ -562,7 +572,7 @@ class CachedQueryProcessor:
                 result = await session.call_tool(toolname, tool_input)
             return result.content[0].text
         except Exception as e:
-            print(f"Failed MCP {toolname} call: {e}")
+            await self.async_message_handler(f"Failed MCP {toolname} call: {e}")
             traceback.print_exc()
             raise
  
@@ -590,7 +600,7 @@ class CachedQueryProcessor:
     def invalidate_cache_for_collection(self, collection_name: str):
         """Invalidate caches related to a specific collection"""
         self._tool_response_cache.remove_pattern(collection_name)
-        print(f"Invalidated caches for collection: {collection_name}")
+        self.message_handler(f"Invalidated caches for collection: {collection_name}")
 
     def get_cache_stats(self) -> dict:
         """Get cache statistics for monitoring"""
@@ -640,7 +650,7 @@ class CachedQueryProcessor:
             # Handle cases where input might contain multiple lines
             # If the input seems truncated (no proper ending), prompt for continuation
             while user_input and not self._is_complete_input(user_input):
-                print("Input appears incomplete. Continue or press Enter to submit:")
+                self.message_handler("Input appears incomplete. Continue or press Enter to submit:")
                 continuation = input("... ").strip()
                 if not continuation:
                     break
@@ -712,17 +722,17 @@ class CachedQueryProcessor:
         except ClientError as error:
             error_code = error.response['Error']['Code']
             if error_code in ['ExpiredTokenException', 'ExpiredToken']:
-                print("AWS Token has expired!", error)
+                self.message_handler(f"AWS Token has expired! {error}", error)
             elif error_code == 'ValidationException':
                 self.history = None 
                 self.clear_all_caches()
-                print("Too much history, clearing...", error)
+                self.message_handler(f"Too much history, clearing... {error}", error)
                 self.run()
             else:
-                print("Some other AWS client error occurred:", error.response)
+                self.message_handler(f"Some other AWS client error occurred: {error.response}", error)
         except KeyboardInterrupt:
-            print("\nKeyboard interrupt received, exiting...")
-            print("Final cache stats:", self.get_cache_stats())
+            self.message_handler("\nKeyboard interrupt received, exiting...")
+            self.message_handler(f"Final cache stats: {self.get_cache_stats()}")
 
     def write_dict_to_json_file(self, data_dict: Dict[str, Any], filename: str) -> None:
         """
