@@ -1,4 +1,6 @@
 import React, { useState } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
@@ -116,8 +118,28 @@ export default function App() {
   }
 
   return (
-    <div style={{ padding: 20, fontFamily: 'Arial' }}>
-      <h2>MCP Web UI</h2>
+    <div style={{ fontFamily: 'Arial' }}>
+      {/* Header with logo */}
+      <header style={{
+        backgroundColor: '#fff',
+        padding: '16px 24px',
+        boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)',
+        marginBottom: '24px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '16px'
+      }}>
+        <img
+          src="/leaflogo.png"
+          alt="Logo"
+          style={{ height: '48px', width: 'auto' }}
+        />
+        <h1 style={{ margin: 0, fontSize: '24px', fontWeight: '600' }}>
+          MCP Query and Viewer
+        </h1>
+      </header>
+
+      <div style={{ padding: '0 24px' }}>
       <div>
         <textarea
           placeholder="Enter question or command (clear, cache stats, cache clear)"
@@ -158,9 +180,18 @@ export default function App() {
         <div style={{ marginTop: 12 }}>
           <strong>Answer:</strong>
           <div
-            style={{ marginTop: 8, backgroundColor: '#fff', padding: 12, borderRadius: 6, border: '1px solid #eee' }}
-            dangerouslySetInnerHTML={{ __html: answer }}
-          />
+            className="markdown-content"
+            style={{
+              marginTop: 8,
+              backgroundColor: '#fff',
+              padding: 12,
+              borderRadius: 6,
+              border: '1px solid #eee',
+              lineHeight: '1.6'
+            }}
+          >
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown>
+          </div>
         </div>
       )}
 
@@ -173,6 +204,7 @@ export default function App() {
             <div style={{ color: '#666' }}>No history yet</div>
           )}
         </div>
+      </div>
       </div>
     </div>
   )
