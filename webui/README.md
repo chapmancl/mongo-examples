@@ -4,20 +4,14 @@ This folder contains a minimal Flask backend (proxy + static serve) and a Vite R
 
 Getting started (development):
 
-1. Run the FastAPI server (from repo root):
-
-```bash
-python -m uvicorn mcp_api:app --host 0.0.0.0 --port 8000 --reload
-```
-
-2. Start the Flask proxy (optional, provides `/api/query` that forwards to FastAPI):
+1. Start the Flask proxy (optional, provides `/query` that forwards to FastAPI):
 
 ```bash
 python -m pip install -r webui/backend/requirements.txt
 python webui/backend/app.py
 ```
 
-3. Start the React dev server:
+2. Start the React dev server:
 
 ```bash
 cd webui/frontend
