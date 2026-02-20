@@ -72,12 +72,12 @@ class APIQueryProcessor:
         self._ensure_impl()
         return self._init_error
 
-    def _handle_message(self, message):
+    def _handle_message(self, message, status="Processing") -> None:
         """Handle incoming messages from the server and queue them for streaming."""
         if isinstance(message, Exception):
             resp = QueryResponse(status="Error", error="Error from server. see message for details", message=str(message))
         else:
-            resp = QueryResponse(status="Processing", message=str(message))
+            resp = QueryResponse(status=status, message=str(message))
         self._message_queue.put(resp.json())
 
     def pop_queued_messages(self) -> List[str]:
@@ -111,7 +111,7 @@ class APIQueryProcessor:
     def clear_history(self) -> QueryResponse:
         self._ensure_impl()
         self._impl.history = None
-        return QueryResponse(status="Clear History", message="History cleared", history=self._impl.history)
+        return QueryResponse(status="Clear History", message="History cleared", history=[])
 
     def get_history(self) -> QueryResponse:
         self._ensure_impl()

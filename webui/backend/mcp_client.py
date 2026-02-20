@@ -78,15 +78,15 @@ class CachedQueryProcessor:
         self._init_caches()
         self.get_bedrock_tools_from_mcp()
     
-    async def async_message_handler(self, message):
-        return await asyncio.to_thread(self.message_handler, message)
+    async def async_message_handler(self, message, status="Processing") -> None:
+        return await asyncio.to_thread(self.message_handler, message, status)
     
-    def _handle_message(self, message):
+    def _handle_message(self, message, status="Processing") -> None:
         """Handle incoming messages from the server."""
         if isinstance(message, Exception):
             print(f"Error in message handler: {message}")
             return    
-        print(message)
+        #print(message)
     
         
     def _init_caches(self):
@@ -110,7 +110,7 @@ class CachedQueryProcessor:
         self._tool_response_cache.clear()
         self.mcp_tools_config = None
         self.get_bedrock_tools_from_mcp()
-        self.message_handler("All caches cleared")
+        self.message_handler("All caches cleared", status="Cache Cleared")
         
     def _create_bedrock_client(self) -> None:
         self.bedrock_client = boto3.client(
@@ -160,7 +160,7 @@ class CachedQueryProcessor:
         for iteration in range(max_iterations):
             try:
                 # Invoke Bedrock using the Converse API
-                self.message_handler(f"Invoking Bedrock (iteration {iteration + 1})")  
+                self.message_handler(f"Invoking Bedrock (iteration {iteration + 1})", status="LLM Thinking...")  
                 response = self.bedrock_client.converse(
                     system=self._system_prompt,
                     modelId=settings.LLM_MODEL_ID,
@@ -175,7 +175,7 @@ class CachedQueryProcessor:
                 if assistant_message.get("content"):
                     for content in assistant_message["content"]:
                         if content.get("text"):
-                            self.message_handler(f"LLM: {content['text'][0:50]}...")  # Show a preview of the response
+                            self.message_handler(f"LLM: {content['text'][0:150]}...", status="LLM Response")  # Show a preview of the response
                 
                 messages.append(assistant_message)
                 
@@ -316,7 +316,7 @@ class CachedQueryProcessor:
         
         # Cache miss - execute the tool
         try:
-            self.message_handler(f"Executing MCP tool: {tool_name} with args: {tool_input}")
+            self.message_handler(f"Executing MCP tool: {tool_name} with args: {tool_input}", status="Tool Execution")
             result = self._execute_mcp_tool_direct(tool_name, tool_input)
             
             # Cache the result
@@ -359,7 +359,7 @@ class CachedQueryProcessor:
             
             return tools_data
         except Exception as e:
-            self.message_handler(f"Error discovering MCP tools: {e}")
+            self.message_handler(f"Error discovering MCP tools: {e}", status="Error")
             return {"error": str(e), "tools": []}
 
     def _discover_mcp_tools_direct(self) -> dict:
@@ -367,7 +367,7 @@ class CachedQueryProcessor:
         try:
             #call the root url and get the available tools
             tools_url = f"{settings.mongo_mcp_root}/"
-            self.message_handler(f"Discovering MCP tools from {tools_url}")
+            self.message_handler(f"Discovering MCP tools from {tools_url}", status="Discovering Tools")
 
             # Make web request to tools_url and return dict data
             try:
@@ -379,7 +379,7 @@ class CachedQueryProcessor:
                 #print(available_tools)
                 
             except requests.RequestException as e:
-                self.message_handler(f"Error making web request to {tools_url}: {e}")
+                self.message_handler(f"Error making web request to {tools_url}: {e}", status="Error")
                 #return {"error": str(e), "tools": [], "resources": []}
 
             if self.mongo_tools:
@@ -388,7 +388,7 @@ class CachedQueryProcessor:
                 return asyncio.run(self._discover_mcp_tools_async())
             
         except Exception as e:
-            self.message_handler(f"Error discovering MCP tools: {e}")
+            self.message_handler(f"Error discovering MCP tools: {e}", status="Error")
             return {"error": str(e), "tools": []}
     
     async def _discover_multi_mcptools(self) -> dict:
@@ -421,7 +421,7 @@ class CachedQueryProcessor:
                     if collection_info:
                         self.mongo_collection_info[name] = collection_info
                 except Exception as e:
-                    await self.async_message_handler(f"Error getting collection info for {name}: {e}")
+                    await self.async_message_handler(f"Error getting collection info for {name}: {e}", status="Error")
                     traceback.print_exc()
 
             self.mcp_client = fastmcp.Client(self.mcp_tools_config)
@@ -429,7 +429,7 @@ class CachedQueryProcessor:
                 await session.ping()                    
                 try:
                     tools_response = await session.list_tools()     
-                    await self.async_message_handler(f"Discovered {len(tools_response)} tools from MCP server at {self.mongo_tools}")
+                    await self.async_message_handler(f"Discovered {len(tools_response)} tools from MCP server at {self.mongo_tools}", status="Tools Discovered")
                     for t in tools_response:
                         tools.append({
                             "name": f"{t.name}",
@@ -439,7 +439,7 @@ class CachedQueryProcessor:
                         })
                     
                 except Exception as e:
-                    await self.async_message_handler(f"Error listing tools: {e}")
+                    await self.async_message_handler(f"Error listing tools: {e}", status="Error")
                     traceback.print_exc()
                 
                 # List available resources                     
@@ -455,7 +455,7 @@ class CachedQueryProcessor:
                         for resource in resources_response
                     ])
                 except Exception as e:
-                    await self.async_message_handler(f"Error listing resources: {e}")
+                    await self.async_message_handler(f"Error listing resources: {e}", status="Error")
                     
             return {
                 "tools": tools,
@@ -463,7 +463,7 @@ class CachedQueryProcessor:
             }
         
         except Exception as e:
-            await self.async_message_handler(f"Failed to discover MCP tools: {e}")   
+            await self.async_message_handler(f"Failed to discover MCP tools: {e}", status="Error")   
             traceback.print_exc()                     
             return {"error": str(e), "tools": [], "resources": []}
 
@@ -486,7 +486,7 @@ class CachedQueryProcessor:
                 try:
                     tools_response = await session.list_tools()     
                     
-                    await self.async_message_handler(f"Discovered {len(tools_response)} tools from MCP server")
+                    await self.async_message_handler(f"Discovered {len(tools_response)} tools from MCP server", status="Tools Discovered")
                     for t in tools_response:
                         tools.append({
                             "name": t.name,
@@ -495,7 +495,7 @@ class CachedQueryProcessor:
                             "annotation": t.annotations
                         })                    
                 except Exception as e:
-                    await self.async_message_handler(f"Error listing tools: {e}")
+                    await self.async_message_handler(f"Error listing tools: {e}", status="Error")
                 
                 # List available resources 
                 resources = []
@@ -519,7 +519,7 @@ class CachedQueryProcessor:
                 }
             
         except Exception as e:
-            await self.async_message_handler(f"Failed to discover MCP tools: {e}")
+            await self.async_message_handler(f"Failed to discover MCP tools: {e}", status="Error")
             traceback.print_exc()           
             return {"error": str(e), "tools": [], "resources": []}
     
@@ -535,8 +535,8 @@ class CachedQueryProcessor:
             bedrock_tools = []
             
             if "error" in mcp_info:
-                self.message_handler(f"MCP discovery failed {mcp_info['error']}")
-                self.message_handler(str(mcp_info))                
+                self.message_handler(f"MCP discovery failed {mcp_info['error']}", status="Error")
+                self.message_handler(str(mcp_info), status="Error")                
 
             for tool in mcp_info.get("tools", []):
                 bedrock_tool = {
@@ -559,7 +559,7 @@ class CachedQueryProcessor:
                 ]
 
             self.mcp_tools_config = bedrock_tools        
-            self.message_handler(f"Using {len(bedrock_tools)} tools discovered from MCP server")
+            self.message_handler(f"Using {len(bedrock_tools)} tools discovered from MCP server", status="Tools Ready")
 
         return self.mcp_tools_config
 
@@ -572,7 +572,7 @@ class CachedQueryProcessor:
                 result = await session.call_tool(toolname, tool_input)
             return result.content[0].text
         except Exception as e:
-            await self.async_message_handler(f"Failed MCP {toolname} call: {e}")
+            await self.async_message_handler(f"Failed MCP {toolname} call: {e}", status="Error")
             traceback.print_exc()
             raise
  
@@ -600,7 +600,7 @@ class CachedQueryProcessor:
     def invalidate_cache_for_collection(self, collection_name: str):
         """Invalidate caches related to a specific collection"""
         self._tool_response_cache.remove_pattern(collection_name)
-        self.message_handler(f"Invalidated caches for collection: {collection_name}")
+        self.message_handler(f"Invalidated caches for collection: {collection_name}", status="Cache Invalidated")
 
     def get_cache_stats(self) -> dict:
         """Get cache statistics for monitoring"""

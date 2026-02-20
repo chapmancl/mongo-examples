@@ -55,8 +55,8 @@ export default function App() {
             try {
               const obj = JSON.parse(line)
 
-              // If response carries history, replace the history viewer
-              if (obj.history !== undefined) {
+              // If response carries history, replace the history viewer only when it's not null/empty
+              if (obj.history !== undefined && obj.history !== null) {
                 setHistory(obj.history)
               }
 
@@ -83,7 +83,16 @@ export default function App() {
         if (buf && buf.trim()) {
           try {
             const data = JSON.parse(buf)
-            if (data.history !== undefined) setHistory(data.history)
+            if (data.history !== undefined && data.history !== null) {
+              const h = data.history
+              const nonEmpty =
+                (typeof h === 'object'
+                  ? Array.isArray(h)
+                    ? h.length > 0
+                    : Object.keys(h).length > 0
+                  : String(h).length > 0)
+              if (nonEmpty) setHistory(h)
+            }
             if (data.answer !== undefined) setAnswer(data.answer)
             if (data.status !== undefined) setStatus(data.status)
             if (data.message !== undefined) {
@@ -141,6 +150,12 @@ export default function App() {
           placeholder="Enter question or command (clear, cache stats, cache clear)"
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              submitQuestion();
+            }
+          }}
           rows={4}
           style={{ width: '100%' }}
         />
@@ -153,7 +168,7 @@ export default function App() {
 
       {error && <div style={{ color: 'red', marginTop: 8 }}>❌ {error}</div>}
 
-      {loading && (streamedOutput || status) && (
+      {(streamedOutput || status) && (
         <div style={{ marginTop: 12 }}>
           <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
             <div style={{ minWidth: 180, backgroundColor: '#fff', padding: 10, borderRadius: 6, border: '1px solid #eee' }}>

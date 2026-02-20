@@ -34,11 +34,13 @@ def api_query():
 
         req = QueryRequest(input=q, history=payload.get("history", []))  # Validate input with Pydantic model
         # Mirror CLI commands
-        if q.startswith("clear"):
+        if q.startswith("clear history"):
             processor.clear_history()
             resp = processor.clear_all_caches().json()
             code = 205
-
+        elif q.startswith("clear"):            
+            resp = processor.clear_all_caches().json()
+            code = 205
         elif q.startswith("cache stats"):
             resp = processor.get_cache_stats().json() 
             code = 200
@@ -111,8 +113,13 @@ def generate(payload):
         exception = None
         
         # Mirror CLI commands
-        if q.startswith("clear"):
-            processor.clear_history()
+        if q.startswith("clear history"):
+            for item in execute_in_thread(processor.clear_history):
+                if isinstance(item, tuple):
+                    result, exception = item
+                else:
+                    yield item
+        elif q.startswith("clear"):
             for item in execute_in_thread(processor.clear_all_caches):
                 if isinstance(item, tuple):
                     result, exception = item
