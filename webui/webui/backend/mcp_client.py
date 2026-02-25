@@ -541,9 +541,10 @@ class CachedQueryProcessor:
                 bedrock_tools.append(bedrock_tool)
             
             if self.mongo_collection_info is not None:
+                model_format = getattr(settings, 'MODEL_OUTPUT_FORMAT', "html")
                 self._system_prompt = [
                     {"text":"***IMPORTANT: always use vector_search before aggregate_query"},
-                    {"text":"***IMPORTANT: All output should be HTML formatted for display in a web UI"},
+                    {"text":f"***IMPORTANT: All output should be {model_format} formatted for display"},
                     {"text":"Only use vector_search with collections that have a search_indexes.type=vectorSearch."},
                     {"text": json.dumps(self.mongo_collection_info)}
                 ]
