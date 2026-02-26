@@ -2,7 +2,10 @@ from typing import Any, List, Optional, Tuple
 import traceback
 from pydantic import BaseModel
 from typing import Optional, List, Any
-import mcp_client
+try:
+    from . import mcp_client
+except ImportError:
+    import mcp_client
 import queue
 import threading
 
@@ -21,8 +24,7 @@ class QueryResponse(BaseModel):
             self.history = self._sanitize_obj(self.history)
         if self.cache_stats is not None:
             self.cache_stats = self._sanitize_obj(self.cache_stats)
-        if self.message is not None:
-            print(self.message)
+        if self.message is not None:            
             self.message = self._sanitize_obj(self.message)
         return self.model_dump_json()
 

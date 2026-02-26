@@ -8,7 +8,10 @@ import hashlib
 from typing import Dict, Any, Optional
 import requests
 import asyncio
-import settings
+try:
+    from . import settings
+except ImportError:
+    import settings
 import fastmcp
 from fastmcp.client.transports import StreamableHttpTransport
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -321,7 +324,7 @@ class CachedQueryProcessor:
             
             # Cache the result
             self._tool_response_cache.set(cache_key, result)
-            
+            self.message_handler(f"Response for {tool_name}", status="LLM Reasoning...")
             return result
         except Exception as e:
             print(f"Error calling MCP server for {tool_name}: {e}")

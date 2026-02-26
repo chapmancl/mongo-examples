@@ -2,8 +2,12 @@ import os
 from flask import Flask, send_from_directory, request, jsonify, abort, Response
 from flask_cors import CORS
 import requests
-import settings
-from mcp_processor import APIQueryProcessor, QueryResponse, QueryRequest
+try:
+    from . import settings
+    from .mcp_processor import APIQueryProcessor, QueryResponse, QueryRequest
+except ImportError:
+    import settings
+    from mcp_processor import APIQueryProcessor, QueryResponse, QueryRequest
 import mimetypes
 import traceback
 from typing import Optional, List, Any
@@ -12,7 +16,7 @@ import json
 
 mimetypes.add_type('application/javascript', '.js')
 
-app = Flask(__name__, static_folder=os.path.join(os.path.dirname(__file__), '..', 'frontend'))
+app = Flask(__name__, static_folder=os.path.join(os.path.dirname(__file__), '..', 'frontend', 'dist'))
 CORS(app)
 
 MCP_CLUSTER_ROOT = settings.mongo_mcp_root
@@ -159,9 +163,7 @@ def generate(payload):
         traceback.print_exc()
         yield QueryResponse(error=str(e)).json() + '\n'
 
-
-
-
+@app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve(path):
     static_folder = app.static_folder
@@ -171,7 +173,7 @@ def serve(path):
     index_path = os.path.join(static_folder, 'index.html')
     if os.path.exists(index_path):
         return send_from_directory(static_folder, 'index.html')
-    return "Frontend not built. Run the frontend dev server or build the project.", 404
+    return "Frontend not found. you must first build the project.", 404
 
 
 if __name__ == '__main__':

@@ -1,40 +1,58 @@
 Web UI for MCP Client
 
-This folder contains a minimal Flask backend (proxy + static serve) and a Vite React frontend.
+This project runs as a single server:
+- Flask backend serves API endpoints: `/query`, `/query/stream`
+- Flask also serves the built frontend from `frontend/dist`
 
-Getting started (development):
+## Prerequisites
 
-1. Start the Flask proxy (optional, provides `/query` that forwards to frontend):
+- Python 3.10+
+- Node.js 18+ and npm
+
+## Build
+
+Run from the repository root (`mcpclient`):
 
 ```bash
 python -m pip install -r webui/backend/requirements.txt
-python webui/backend/app.py
-```
-
-2. Start the React dev server:
-
-```bash
 cd webui/frontend
 npm install
-npm run dev
-```
-
-In dev you can either call the FastAPI directly at `http://localhost:8000/query` (the React app calls `/api/query` so run the Flask proxy on port 5000), or configure the frontend to call the FastAPI URL directly.
-
-Building for production (calls FastAPI directly):
-
-Set the API URL at build time (example in `.env.example`):
-
-```bash
-cp .env.example .env
-```
-
-Then build:
-
-```bash
-cd webui/frontend
 npm run build
-# then serve the built files with the Flask backend
-python webui/backend/app.py
 ```
 
+## Run
+
+From `webui`:
+
+```bash
+python backend/app.py
+```
+
+## One-command build and run
+
+From `webui`:
+
+```bash
+bash build_and_run.sh
+```
+
+## Access
+
+- UI: `http://localhost:8000`
+- API: `http://localhost:8000/query`
+- Streaming API: `http://localhost:8000/query/stream`
+
+## Notes
+
+- Frontend uses same-origin API calls by default.
+- Set `VITE_API_URL` only if you intentionally want a different API host.
+- Re-run `npm run build` after frontend code changes.
+
+## Docker
+
+Build and run from repository root:
+
+```bash
+docker build -t mcp-webui ./webui
+docker run --rm -p 8000:8000 mcp-webui
+```
