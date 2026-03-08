@@ -74,8 +74,14 @@ class MongoDBClient:
         # the url may be overidden by an incoming dynamic config, so test that here and return the local one instead of the settings based url
         m_url = self.settings.mongo_url()
         if self.db_url:
-            m_url = self.db_url
-        return f"mongodb+srv://{credentials['username']}:{credentials['password']}@{m_url}"
+            m_uri = self.db_url
+        if "@" in m_url:
+            m_uri = m_url
+        elif "//" in m_url:
+            m_uri = m_url.replace("//", f"//{credentials['username']}:{credentials['password']}@")
+        else:
+            m_uri = f"mongodb+srv://{credentials['username']}:{credentials['password']}@{m_url}"
+        return m_uri
 
     def get_current_ip(self) -> str:
         """
@@ -143,7 +149,9 @@ class MongoDBClient:
     def sync_connect_to_mongodb(self):
         """Synchronous version of connect_to_mongodb"""
         try:
-            self.client = pymongo.MongoClient(self.get_mongo_uri())
+            uri = self.get_mongo_uri()
+            #print(f"connecting to mongodb {self._db_name} {self._collection_name} at {uri}")
+            self.client = pymongo.MongoClient(uri)
             self.client.admin.command('ping')
             self._set_locals()
             self._connection_initialized = True

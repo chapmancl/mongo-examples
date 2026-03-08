@@ -23,18 +23,44 @@ A highly configurable Model Context Protocol (MCP) server that dynamically loads
 - MCP client 
 
 ## How to Run the MCP service
+
+### Quick Start - Local Standalone Mode
+
+**New!** Run the MCP server locally without AWS dependencies:
+
+```bash
+# 1. Copy and configure environment file
+cp .env.local.example .env.local
+# Edit .env.local with your MongoDB credentials
+
+# 2. Run the server
+./run-local.sh  # Linux/macOS
+# OR
+.\run-local.ps1  # Windows PowerShell
+```
+
+📖 **See [QUICKSTART_LOCAL.md](QUICKSTART_LOCAL.md) for detailed local setup instructions**
+
+📖 **See [STANDALONE.md](STANDALONE.md) for complete standalone mode documentation**
+
+### Full Deployment Options
+
 1. Setup MongoDB with MCP configurations (see [Dynamic Configuration Setup](#dynamic-configuration-setup) below)
 2. Setup your python environment (see [Python Virtual Environment Setup](#python-virtual-environment-setup))
 3. Install requirements (see [Installation](#installation))
 4. Run fastapi (see [FastAPI Deployment](#fastapi-deployment))
-    
-    a. optionally deploy a container:
+
+    a. **Local standalone** (recommended for development):
+      - See [QUICKSTART_LOCAL.md](QUICKSTART_LOCAL.md)
+      - See [STANDALONE.md](STANDALONE.md)
+
+    b. **Container deployment**:
       - locally [docker](#docker-instructions)
-    
-    b. run on AWS:
-      - ECS [Single Container](#pushing-to-amazon-ecr)
+
+    c. **AWS deployment**:
+      - ECS [Single Container](#pushing-to-amazon-ecr) - See [DEPLOYMENT.md](DEPLOYMENT.md)
       - EKS [Kubernetes](#kubernetes-deployment-with-terraform)
-      
+
 5. Run the mcp client. see [mcpclient/mcp_client.py](../mcpclient/mcp_client.py)
 
 ## Dynamic Configuration Setup

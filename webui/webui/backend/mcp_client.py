@@ -2,6 +2,7 @@ import json
 import boto3
 from botocore.exceptions import ClientError
 import re
+import os
 import time
 import traceback
 import hashlib
@@ -63,12 +64,19 @@ class CachedQueryProcessor:
         self.mcp_tools_config = None
         self.mongo_tools = None
         self.mongo_collection_info = {}
+        self.mcp_url = None
         self._system_prompt = ""
+        self.auth_token = settings.AUTH_TOKEN
         self._headers = {
-            'Authorization': f'Bearer {settings.AUTH_TOKEN}',
+            'Authorization': f'Bearer {self.auth_token}',
             'Content-Type': 'application/json' 
         }        
-        
+        if json.loads(os.getenv('USE_LOCAL_MODE', 'false').lower()):
+            print("Running with local MCP server")
+            self.mcp_url = settings.mongo_mcp_root_local
+        else:
+            self.mcp_url = settings.mongo_mcp_root
+
         # Initialize caching system
         self._init_caches()
         self.get_bedrock_tools_from_mcp()
@@ -356,17 +364,18 @@ class CachedQueryProcessor:
         """Discover MCP tools without caching"""
         try:
             #call the root url and get the available tools
-            tools_url = f"{settings.mongo_mcp_root}/"
+            tools_url = f"{self.mcp_url}/"
             #print(f"Discovering MCP tools from {tools_url}")
 
             # Make web request to tools_url and return dict data
             try:
                 response = requests.get(tools_url, headers=self._headers)
+                #print(f'Headers: {self._headers}, tools_url: {tools_url}, response: {response}')
                 response.raise_for_status()
                 jdoc = response.json()
                 available_tools = jdoc.get("available_tools", [])
                 self.mongo_tools = available_tools
-                #print(available_tools)
+                print(available_tools)
                 
             except requests.RequestException as e:
                 print(f"Error making web request to {tools_url}: {e}")
@@ -389,7 +398,7 @@ class CachedQueryProcessor:
             dict: Dictionary containing available endpoints, tools, and their schemas
         """
         try:
-            root_frmt = f"{settings.mongo_mcp_root}/{{}}/mcp"
+            root_frmt = f"{self.mcp_url}/{{}}/mcp"
             self.mcp_tools_config = { }
             tools = []
             resources = []
@@ -399,12 +408,12 @@ class CachedQueryProcessor:
                 endpoint = root_frmt.format(name)
                 self.mcp_tools_config[name] = {
                     "url": endpoint,
-                    "headers": {"Authorization": f"Bearer {settings.AUTH_TOKEN}"}
+                    "headers": {"Authorization": f"Bearer {self.auth_token}"}
                 }
                 # we're going to call get_collection infor here too so we don't need to have the LLM do it later.
                 self.mongo_collection_info[name] = {}
                 try:
-                    response = requests.get(f"{settings.mongo_mcp_root}/{name}/collection_info", headers=self._headers)
+                    response = requests.get(f"{self.mcp_url}/{name}/collection_info", headers=self._headers)
                     response.raise_for_status()
                     jdoc = response.json()
                     collection_info = jdoc.get("collection_info", None)

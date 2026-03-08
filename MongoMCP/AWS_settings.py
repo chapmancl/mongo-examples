@@ -15,6 +15,10 @@ class AWSSettings:
         #self.LLM_MODEL_ID = "us.anthropic.claude-sonnet-4-20250514-v1:0"
         #self.LLM_MODEL_ID = "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
         self.LLM_MODEL_ID = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+        self.mcp_tool_name = os.getenv('MCP_TOOL_NAME', 'AirbnbSearch')
+        self.transport = os.getenv('MCP_TRANSPORT', 'http')
+        self.host = os.getenv('SERVER_HOST', '0.0.0.0')
+        self.port = int(os.getenv('SERVER_PORT', '8000'))
         # Initialize AWS Secrets Manager client
         self._secrets_client = boto3.client(
             'secretsmanager',

@@ -17,3 +17,7 @@ pyvenv.cfg
 # Virtual environments
 .venv
 *.tfvars
+
+# Local environment configuration
+.env.local
+.env

@@ -14,8 +14,8 @@ from .MongoDBClient import MongoDBClient
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# flag to load only 1 tool when local
-IS_LOCAL = json.loads(os.getenv('IS_LOCAL', 'false').lower())
+#  flag to load only 1 tool when local
+IS_LOCAL = json.loads(os.getenv('USE_LOCAL_MODE', 'false').lower())
 
 class MongoMCPMiddleware(Middleware):
     """
@@ -65,11 +65,12 @@ class MongoMCPMiddleware(Middleware):
         try:
             header = jwt.get_unverified_header(token)
             api_key = header.get("api_key")
-            
+            #print(f"AUTH token verification in DB: {api_key}")
             self.mongo_client.sync_connect_to_mongodb()
             agent_coll = self.mongo_client.get_collection("agent_identities")
             agent_rec = agent_coll.find_one({"agent_key": api_key})
             if agent_rec:
+                #print("Found Agent Record")
                 # you should hash.... do as I say not as I do.
                 # store the hash private key in secrets manager, then implement hash. 
                 # I think most will come in through a token service which makes this moot.
@@ -80,8 +81,9 @@ class MongoMCPMiddleware(Middleware):
                 decoded_payload = jwt.decode(token,pvk, algorithms=["HS256"])
                 agent_rec.pop("pvk")  # remove sensitive info
                 agent_name = decoded_payload.get("agent_name")
+                #print(f"AUTH agent_name: {agent_name}")
                 if agent_name == agent_rec.get("agent_name"):
-                    logger.info(f"Authorization successful for agent: {agent_name}")
+                    #logger.info(f"Authorization successful for agent: {agent_name}")
                     allowed = True
         
         except jwt.exceptions.InvalidTokenError  as je:

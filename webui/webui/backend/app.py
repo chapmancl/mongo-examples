@@ -15,7 +15,11 @@ mimetypes.add_type('application/javascript', '.js')
 app = Flask(__name__, static_folder=os.path.join(os.path.dirname(__file__), '..', 'frontend'))
 CORS(app)
 
-MCP_CLUSTER_ROOT = settings.mongo_mcp_root
+if json.loads(os.getenv('USE_LOCAL_MODE', 'false').lower()):
+    print("Running with local MCP server")
+    MCP_CLUSTER_ROOT = settings.mongo_mcp_root_local
+else:
+    MCP_CLUSTER_ROOT = settings.mongo_mcp_root
 processor = APIQueryProcessor()
 
 
@@ -41,7 +45,9 @@ class QueryResponse(BaseModel):
     cache_stats: Optional[dict] = None
     message: Optional[str] = None
 
-
+@app.route('/', methods=['GET'])
+def index():
+    return "MCP Query and Viewer API is running", 200
 
 @app.route('/query', methods=['POST'])
 def api_query():
@@ -82,9 +88,6 @@ def api_query():
         return jsonify({'error': str(e)}), 500
     
     return jsonify(resp.dict()), 200
-
-
-
 
 @app.route('/query/stream', methods=['POST'])
 def stream_query():

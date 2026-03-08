@@ -11,13 +11,21 @@ from fastmcp.dependencies import CurrentContext
 from fastmcp.server.dependencies import AccessToken, get_access_token
 from fastmcp.server.context import Context
 from starlette.responses import JSONResponse
-from AWS_settings import settings
 from MongoMCP import MongoDBVectorServer, MongoMCPMiddleware, BedrockClient, MongoTokenVerifier
 import traceback
 import os
 import sys
 
-logging.basicConfig(level=logging.INFO)
+USE_LOCAL_MODE = os.getenv('USE_LOCAL_MODE', 'false').lower() == "true"
+
+if USE_LOCAL_MODE:
+    # Start with : > fastapi run mongo_mcp.py --port 8001
+    from local_settings import local_settings as settings
+else:
+    # Running with kubernetes in EKS/Fargate
+    from AWS_settings import settings as settings
+
+logging.basicConfig(level=logging.info)
 logger = logging.getLogger(__name__)
 
 
@@ -32,7 +40,7 @@ main component flow:
 
 """
 
-TOOL_NAME = os.getenv('MCP_TOOL_NAME')
+TOOL_NAME = settings.mcp_tool_name
 mongo_middleware: MongoMCPMiddleware
 mongo_server: MongoDBVectorServer
 auth_provider = None
@@ -77,6 +85,7 @@ mcp = FastMCP("mongodb-vector-server", include_fastmcp_meta=False, auth=auth_pro
 mcp.add_middleware(mongo_middleware)
 llm_client = BedrockClient(settings)
 
+# ----------------------- BEGIN MCP TOOL DEFINITIONS ----------------------- #
 @mcp.tool()
 async def upsert_document(
     collection: Annotated[str, Field(description="Name of the MongoDB collection to upsert into.")],
@@ -294,7 +303,7 @@ async def aggregate_query(
         return {"error":f"Unexpected error executing aggregate_query: {str(e)}"}
 
 
-#***********  BEGIN FASTAPI SECTION  ***************
+# ----------------------- BEGIN FASTAPI SECTION ----------------------- #
 
 # We have our tools, mount the mcp to fastapi and setup our fastapi authentication
 # everything after this should be FastAPI endpoints.
@@ -304,6 +313,7 @@ security_token = HTTPBearer()
 optional_token = HTTPBearer(auto_error=False)
 
 def verify_token(credentials: HTTPAuthorizationCredentials) -> Any:
+    #print("mongomcp: verify_token")
     (allowed, agent_rec) = mongo_middleware.check_authorization(credentials.credentials)
     if not allowed:
         raise HTTPException(
@@ -599,7 +609,7 @@ def main():
     """   
     #mcp.run(transport="sse", host="0.0.0.0", port=8001)
     #mcp.run(transport="sse",  port=8001) # this is for local IDE/Cline integration
-    mcp.run(transport="http", host="0.0.0.0", port=8000) # this is for AWS containers  
+    mcp.run(transport=settings.transport, host=settings.host, port=settings.port) # this is for AWS containers  
 
 
 if __name__ == "__main__":
