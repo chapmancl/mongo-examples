@@ -9,6 +9,7 @@ lib64
 lib/
 include/
 bin/
+node_modules/
 pyvenv.cfg
 .python-version
 
