@@ -6,6 +6,7 @@ import os
 import time
 import traceback
 import hashlib
+import pprint
 from typing import Dict, Any, Optional
 import requests
 import asyncio
@@ -124,6 +125,10 @@ class CachedQueryProcessor:
         self.message_handler("All caches cleared", status="Cache Cleared")
         
     def _create_bedrock_client(self) -> None:
+        #print("Creating Bedrock Client")
+        #print(f'AWS_ACCESS_KEY_ID: {os.getenv("AWS_ACCESS_KEY_ID","not there")}')
+        #print(f'AWS_SECRET_ACCESS_KEY: {os.getenv("AWS_SECRET_ACCESS_KEY","not there")}')
+        #print(f'AWS_SESSION_TOKEN: {os.getenv("AWS_SESSION_TOKEN","not there")}')
         self.bedrock_client = boto3.client(
             'bedrock-runtime',
             region_name=settings.aws_region
@@ -167,7 +172,8 @@ class CachedQueryProcessor:
         tool_config = {
             "tools": tools
         }
-        
+        #print("Bedrock Tool Config")
+        #pprint.pprint(tool_config)
         for iteration in range(max_iterations):
             try:
                 # Invoke Bedrock using the Converse API
@@ -490,9 +496,9 @@ class CachedQueryProcessor:
         try:
             #self.mcp_client = fastmcp.Client(self.mcp_tools_config)
             async with self.mcp_client as session:
-                #print("Pinging MCP server...")
+                print("Pinging MCP server...")
                 await session.ping()
-                #print("MCP server is reachable")
+                print("MCP server is reachable")
             
                 # List available tools with error handling
                 tools = []
@@ -543,10 +549,12 @@ class CachedQueryProcessor:
         Returns:
             list: List of tools in Bedrock toolSpec format
         """
+        
         if self.mcp_tools_config is None:            
             mcp_info = self.discover_mcp_tools()
             bedrock_tools = []
-            
+            #print(f"Eslewhere7: {mcp_info}")
+        
             if "error" in mcp_info:
                 self.message_handler(f"MCP discovery failed {mcp_info['error']}", status="Error")
                 self.message_handler(str(mcp_info), status="Error")                
@@ -608,6 +616,7 @@ class CachedQueryProcessor:
             self.history = []
         
         # Invoke Bedrock with MCP tools and caching
+        
         assistant_message = self.invoke_bedrock_with_tools(question)
         return assistant_message, self.history
 

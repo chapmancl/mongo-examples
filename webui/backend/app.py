@@ -87,6 +87,7 @@ def generate(payload):
             return
 
         q = (payload.get("input", "") or "").strip()
+        #print(f"Generate Payload: {q}")
         if not q:
             yield QueryResponse(status="Error", error="Empty input").json() + '\n'
             return
@@ -149,7 +150,7 @@ def generate(payload):
         else:
             # Yield progress update
             yield QueryResponse(status='querying', message='Querying Claude with MCP tools...').json() + '\n'
-
+            
             # Run the query in a background thread to allow concurrent message streaming
             req = QueryRequest(input=q, history=payload.get("history", []))
             for item in execute_in_thread(lambda: processor.query_claude_with_mcp_tools(req)):

@@ -81,7 +81,8 @@ def setup_from_mongo():
 
 setup_from_mongo()
 # Create FastMCP server instance with bearer token authentication
-mcp = FastMCP("mongodb-vector-server", include_fastmcp_meta=False, auth=auth_provider)
+#mcp = FastMCP("mongodb-vector-server", include_fastmcp_meta=False, auth=auth_provider)
+mcp = FastMCP("mongodb-vector-server", auth=auth_provider)
 mcp.add_middleware(mongo_middleware)
 llm_client = BedrockClient(settings)
 
@@ -490,7 +491,7 @@ async def invoke_llm(prompt_name: str, body: Dict[str, Any],
     
     """     
     if not "llm:invoke" in token.get("scope", []):
-        logger.error(f"Insufficient scope for invoke_llm: llm:invoke permission required for agent {token["agent_key"]}")
+        logger.error(f'Insufficient scope for invoke_llm: llm:invoke permission required for agent {token["agent_key"]}')
         raise HTTPException(status_code=403, detail="Insufficient scope")
 
     context = body.get("context")

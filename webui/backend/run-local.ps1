@@ -9,15 +9,10 @@ param(
 )
 
 function Show-Help {
-    Write-Host "MongoDB MCP Server - Local Mode Startup Script"
+    Write-Host "Flask App Server - Local Mode Startup Script"
     Write-Host ""
     Write-Host "Usage: .\run-local.ps1 [OPTIONS]"
     Write-Host ""
-    Write-Host "Options:"
-    Write-Host "  -Host <host>     Host to bind to (default: 0.0.0.0)"
-    Write-Host "  -Port <port>     Port to bind to (default: 8000)"
-    Write-Host "  -SSE             Use SSE transport instead of HTTP"
-    Write-Host "  -Help            Show this help message"
     Write-Host ""
     Write-Host "Environment variables are loaded from .env.local"
     exit 0
@@ -28,11 +23,11 @@ if ($Help) {
 }
 
 Write-Host "=========================================="
-Write-Host "MongoDB MCP Server - Local Mode"
+Write-Host "Flask App Server - Local Mode"
 Write-Host "=========================================="
 
 # Check if .env.local exists
-if (-not (Test-Path ".env.local")) {
+if (-not (Test-Path "..\..\MongoMCP\.env.local")) {
     Write-Host "ERROR: .env.local file not found!" -ForegroundColor Red
     Write-Host ""
     Write-Host "Please create .env.local from the template:"
@@ -44,7 +39,7 @@ if (-not (Test-Path ".env.local")) {
 
 # Load environment variables from .env.local
 Write-Host "Loading environment variables from .env.local..."
-Get-Content ".env.local" | ForEach-Object {
+Get-Content "..\..\MongoMCP\.env.local" | ForEach-Object {
     $line = $_.Trim()
     # Skip comments and empty lines
     if ($line -and -not $line.StartsWith("#")) {
@@ -54,6 +49,7 @@ Get-Content ".env.local" | ForEach-Object {
             $value = $parts[1].Trim()
             # Remove quotes if present
             $value = $value -replace '^["'']|["'']$', ''
+            Write-Host "KEY: $key VALUE: $value"
             [Environment]::SetEnvironmentVariable($key, $value, "Process")
         }
     }
@@ -85,31 +81,16 @@ Write-Host "Config DB: $(if ($MCP_CONFIG_DB) { $MCP_CONFIG_DB } else { 'mcp_conf
 Write-Host "Config Collection: $(if ($MCP_CONFIG_COL) { $MCP_CONFIG_COL } else { 'mcp_tools' })"
 Write-Host ""
 
-# Override from environment if set
-$SERVER_HOST = [Environment]::GetEnvironmentVariable("SERVER_HOST", "Process")
-$SERVER_PORT = [Environment]::GetEnvironmentVariable("SERVER_PORT", "Process")
-
-if ($SERVER_HOST) { $ServerHost = $SERVER_HOST }
-if ($SERVER_PORT) { $Port = [int]$SERVER_PORT }
-
-# Determine transport
-$Transport = if ($SSE) { "sse" } else { "http" }
 
 # Start the server
-Write-Host "Starting MongoDB MCP Server..."
-Write-Host "Host: $ServerHost"
-Write-Host "Port: $Port"
-Write-Host "Transport: $Transport"
+Write-Host "Starting Flask App Server..."
 Write-Host "=========================================="
 Write-Host ""
 
 # Build command arguments
-$args = @("mongo_mcp.py", "--host", $ServerHost, "--port", $Port, "--local")
-if ($SSE) {
-    $args += @("--transport", "sse")
-}
+$args = @("app.py", "--local")
 
-& fastapi run mongo_mcp.py --port $Port
+
 # Run Python
-#& python $args
+& python $args
 
