@@ -29,3 +29,4 @@ popd >/dev/null
 
 echo "[3/3] Starting web server at http://localhost:8000 ..."
 exec "$PYTHON_BIN" backend/app.py
+# gunicorn -w 2 -k gthread --threads 4 -b 0.0.0.0:8000 backend.app:app --timeout 300
