@@ -431,6 +431,7 @@ class CachedQueryProcessor:
                     "headers": {"Authorization": f"Bearer {self.auth_token}"}
                 }
                 # we're going to call get_collection infor here too so we don't need to have the LLM do it later.
+                '''
                 self.mongo_collection_info[name] = {}
                 try:
                     response = requests.get(f"{self.mcp_url}/{name}/collection_info", headers=self._headers)
@@ -442,6 +443,7 @@ class CachedQueryProcessor:
                 except Exception as e:
                     await self.async_message_handler(f"Error getting collection info for {name}: {e}", status="Error")
                     traceback.print_exc()
+                '''
 
             self.mcp_client = fastmcp.Client(self.mcp_tools_config)
             async with self.mcp_client as session:
