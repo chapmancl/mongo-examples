@@ -1,0 +1,71 @@
+{
+    "containerDefinitions": [
+        {
+            "name": "mcp-search",
+            "image": "<<YOUR AWS ACCOUNT ID>>.dkr.ecr.us-east-2.amazonaws.com/<<PREFIX>>/mongodb-mcp-webui:latest",
+            "cpu": 0,
+            "portMappings": [
+                {
+                    "name": "mcp",
+                    "containerPort": 8001,
+                    "hostPort": 8001,
+                    "protocol": "tcp",
+                    "appProtocol": "http"
+                }
+            ],
+            "essential": true,
+            "environment": [
+                {
+                    "name": "MONGO_MCP_ROOT",
+                    "value": "https://mongomcproot.example.com"
+                },
+                {
+                    "name": "MONGO_CREDS",
+                    "value": "demo"
+                }
+            ],
+            "mountPoints": [],
+            "volumesFrom": [],
+            "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": "/ecs/mongodb-mcp-webui",
+                    "mode": "non-blocking",
+                    "awslogs-create-group": "true",
+                    "max-buffer-size": "25m",
+                    "awslogs-region": "us-east-2",
+                    "awslogs-stream-prefix": "ecs"
+                },
+                "secretOptions": []
+            },
+            "healthCheck": {
+                "command": [
+                    "CMD-SHELL",
+                    "curl -f http://localhost:8001/ || exit 1"
+                ],
+                "interval": 120,
+                "timeout": 15,
+                "retries": 3,
+                "startPeriod": 30
+            },
+            "systemControls": []
+        }
+    ],
+    "family": "mcpwebui",
+    "taskRoleArn": "arn:aws:iam::<<YOUR AWS ACCOUNT ID>>:role/ecsTaskExecutionRole",
+    "executionRoleArn": "arn:aws:iam::<<YOUR AWS ACCOUNT ID>>:role/ecsTaskExecutionRole",
+    "networkMode": "awsvpc",    
+    "volumes": [],
+    "placementConstraints": [],
+    "requiresCompatibilities": [
+        "FARGATE"
+    ],
+    "cpu": "1024",
+    "memory": "3072",
+    "runtimePlatform": {
+        "cpuArchitecture": "X86_64",
+        "operatingSystemFamily": "LINUX"
+    },
+    "tags": [
+    ]
+}

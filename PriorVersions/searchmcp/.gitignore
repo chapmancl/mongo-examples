@@ -12,9 +12,8 @@ bin/
 pyvenv.cfg
 .python-version
 
-node_modules/
-
 
 
 # Virtual environments
 .venv
+*.tfvars

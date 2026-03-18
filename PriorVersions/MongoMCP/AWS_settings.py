@@ -9,16 +9,12 @@ class AWSSettings:
     def __init__(self):
         self.aws_region = os.getenv('AWS_REGION', 'us-east-2')
         self.mongo_creds = os.getenv('MONGO_CREDS')
-        self.TOOL_NAME = os.getenv('MCP_TOOL_NAME', 'AirbnbSearch')
-        self.IS_LOCAL = json.loads(os.getenv('IS_LOCAL', 'true').lower())             
         self.EMBEDDING_MODEL_ID = "amazon.titan-embed-text-v2:0"
         self.mcp_config_db = "mcp_config"
         self.mcp_config_col = "mcp_tools"
+        #self.LLM_MODEL_ID = "us.anthropic.claude-sonnet-4-20250514-v1:0"
+        #self.LLM_MODEL_ID = "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
         self.LLM_MODEL_ID = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
-        self.LLM_MAX_ITERATIONS = int(os.getenv('LLM_MAX_ITERATIONS', '15'))
-        self.ENABLE_CACHE_POINTS = os.getenv('ENABLE_CACHE_POINTS', 'true').lower() in ['1', 'true', 'yes', 'on']
-        self.ENABLE_BEDROCK_CACHING = True
-        
         # Initialize AWS Secrets Manager client
         self._secrets_client = boto3.client(
             'secretsmanager',
@@ -33,7 +29,7 @@ class AWSSettings:
         Fetch MongoDB credentials from AWS Secrets Manager.
         
         Returns:
-            Dict containing username, password, and mongoUrl
+            Dict containing username, password, and mongoUri
             
         Raises:
             Exception: If failed to fetch credentials
@@ -48,7 +44,7 @@ class AWSSettings:
             self._credentials_cache = {
                 'username': secret['username'],
                 'password': secret['password'],
-                'mongoUrl': secret['uri']
+                'mongoUri': secret['uri']
             }
             
             return self._credentials_cache
@@ -62,7 +58,7 @@ class AWSSettings:
       
     def mongo_url(self) -> str:
         """Get MongoDB connection URL."""
-        return self._credentials_cache['mongoUrl']
+        return self._credentials_cache['mongoUri']
 
     def mongo_timeout(self) -> int:
         """Get MongoDB timeout in milliseconds."""

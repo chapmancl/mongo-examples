@@ -1,5 +1,6 @@
 # Python-generated files
 __pycache__/
+*__pycache__/
 *.py[oc]
 build/
 dist/
@@ -11,6 +12,9 @@ include/
 bin/
 pyvenv.cfg
 .python-version
+
+# node_modules
+*node_modules/
 
 
 

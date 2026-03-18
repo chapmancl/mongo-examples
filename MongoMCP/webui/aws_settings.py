@@ -4,13 +4,10 @@ from typing import Dict, Optional
 import boto3
 from botocore.exceptions import ClientError
 
-
 class AWSSettings:
     def __init__(self):
         self.aws_region = os.getenv('AWS_REGION', 'us-east-2')
         self.mongo_creds = os.getenv('MONGO_CREDS')
-        self.TOOL_NAME = os.getenv('MCP_TOOL_NAME', 'AirbnbSearch')
-        self.IS_LOCAL = json.loads(os.getenv('IS_LOCAL', 'true').lower())             
         self.EMBEDDING_MODEL_ID = "amazon.titan-embed-text-v2:0"
         self.mcp_config_db = "mcp_config"
         self.mcp_config_col = "mcp_tools"
@@ -18,7 +15,18 @@ class AWSSettings:
         self.LLM_MAX_ITERATIONS = int(os.getenv('LLM_MAX_ITERATIONS', '15'))
         self.ENABLE_CACHE_POINTS = os.getenv('ENABLE_CACHE_POINTS', 'true').lower() in ['1', 'true', 'yes', 'on']
         self.ENABLE_BEDROCK_CACHING = True
+        self.ENABLE_MCP_TOOL_CACHING = True
+        self.ENABLE_RESPONSE_CACHING = True
+        self.CACHE_TTL = 300
+        self.mongo_mcp_root = os.getenv('MONGO_MCP_ROOT', "https://mongomcproot.example.com")
+        self.BEDROCK_SYSTEM_PROMPT_TEXTS = [
+            "***IMPORTANT: if a vector_search tool is available, always use vector_search before aggregate_query",
+            "***IMPORTANT: All output should be Markdown formatted for display within a div in an existing webpage. Do not include html, head, or body tags. Only include the inner content. Always use Markdown formatting.",
+            "Only use vector_search with collections that have a search_indexes.type=vectorSearch.",
+        ]
+        self.AUTH_TOKEN = ""
         
+
         # Initialize AWS Secrets Manager client
         self._secrets_client = boto3.client(
             'secretsmanager',
@@ -27,6 +35,7 @@ class AWSSettings:
         
         # Cache for credentials to avoid repeated API calls
         self._credentials_cache: Optional[Dict[str, str]] = None
+        self.get_mongo_credentials()  # Pre-fetch credentials on initialization
     
     def get_mongo_credentials(self) -> Dict[str, str]:
         """
@@ -71,3 +80,11 @@ class AWSSettings:
 
 # Create a singleton instance
 settings = AWSSettings()
+
+
+def __getattr__(name: str):
+    """Backward-compatible module attribute access via singleton settings."""
+    if hasattr(settings, name):
+        return getattr(settings, name)
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
+

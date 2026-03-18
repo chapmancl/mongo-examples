@@ -11,10 +11,10 @@ from fastmcp.dependencies import CurrentContext
 from fastmcp.server.dependencies import AccessToken, get_access_token
 from fastmcp.server.context import Context
 from starlette.responses import JSONResponse
-#from AWS_settings import settings 
-from local_settings import settings # change this to use AWS_settings
-from mongomcp import MongoDBVectorServer, MongoMCPMiddleware, ServerBedrockClient, MongoTokenVerifier
+from AWS_settings import settings
+from MongoMCP import MongoDBVectorServer, MongoMCPMiddleware, BedrockClient, MongoTokenVerifier
 import traceback
+import os
 import sys
 
 logging.basicConfig(level=logging.INFO)
@@ -32,6 +32,7 @@ main component flow:
 
 """
 
+TOOL_NAME = os.getenv('MCP_TOOL_NAME')
 mongo_middleware: MongoMCPMiddleware
 mongo_server: MongoDBVectorServer
 auth_provider = None
@@ -54,7 +55,7 @@ def setup_from_mongo():
     # load or reload the mongo middleware and server config
     # we do this to get fresh settings from mongo if reset_settings is called
     try:
-        mongo_middleware = MongoMCPMiddleware(settings)
+        mongo_middleware = MongoMCPMiddleware(TOOL_NAME, settings)
         if mongo_middleware.ANNOTATIONS:
             # Initialize the MongoDB vector server
             mongo_server = MongoDBVectorServer(settings)
@@ -67,14 +68,14 @@ def setup_from_mongo():
         error = e
     if failed:
         logger.error(f"Failed to get configuration from MongoDB. Will wait for 10s before retry.\r\n {KeyError}")
-        #time.sleep(10)
+        time.sleep(10)
         sys.exit(1)
 
 setup_from_mongo()
 # Create FastMCP server instance with bearer token authentication
-mcp = FastMCP("mongodb-vector-server", auth=auth_provider)
+mcp = FastMCP("mongodb-vector-server", include_fastmcp_meta=False, auth=auth_provider)
 mcp.add_middleware(mongo_middleware)
-llm_client = ServerBedrockClient(settings)
+llm_client = BedrockClient(settings)
 
 @mcp.tool()
 async def upsert_document(
@@ -114,7 +115,7 @@ async def upsert_document(
         return {"error": f"Error executing upsert_document: {str(e)}"}
     except Exception as e:
         logger.error(f"Unexpected error in upsert_document: {e}")
-        logger.debug("".join(traceback.format_exception(None, e, e.__traceback__)))
+        traceback.print_exc()
         return {"error": f"Unexpected error executing upsert_document: {str(e)}"}
 
 @mcp.tool()
@@ -150,7 +151,7 @@ async def vector_search(
         
     except Exception as e:
         logger.error(f"Vector search failed: {e}")
-        logger.debug("".join(traceback.format_exception(None, e, e.__traceback__)))
+        traceback.print_exc()
         return {"error":f"Error executing vector_search: {str(e)}" }
 
 @mcp.tool()
@@ -179,49 +180,7 @@ async def text_search(
         
     except Exception as e:
         logger.error(f"Text search failed: {e}")
-        logger.debug("".join(traceback.format_exception(None, e, e.__traceback__)))
         return {"error":f"Error executing text_search: {str(e)}"}
-
-@mcp.tool()
-async def geospatial_search(
-    collection: Annotated[str, Field(description="Name of the MongoDB collection to search in.")],
-    longitude: Annotated[float, Field(description="Longitude for the center point in WGS84.", ge=-180, le=180)],
-    latitude: Annotated[float, Field(description="Latitude for the center point in WGS84.", ge=-90, le=90)],
-    limit: Annotated[int, Field(default=10, description="Maximum number of results to return.", ge=1, le=100)] = 10,
-    max_distance_meters: Annotated[Optional[float], Field(default=None, description="Optional maximum distance from the center point in meters.", ge=0)] = None,
-    min_distance_meters: Annotated[Optional[float], Field(default=None, description="Optional minimum distance from the center point in meters.", ge=0)] = None,
-    filters: Annotated[Optional[List], Field(default=None, description="Optional list of filters in [field, value] format.")] = None,
-    geo_field: Annotated[str, Field(default="address.location", description="GeoJSON point field path with a 2dsphere index.")] = "address.location"
-) -> Dict[str, Any]:
-    """Dynamic docstring loaded from JSON configuration"""
-    try:
-        results = await mongo_server.geospatial_search(
-            collection=collection,
-            longitude=longitude,
-            latitude=latitude,
-            max_distance_meters=max_distance_meters,
-            min_distance_meters=min_distance_meters,
-            filters=filters,
-            limit=limit,
-            geo_field=geo_field,
-        )
-        jobj = json.dumps(results, default=str)
-        return {
-            "results": jobj,
-            "count": len(results),
-            "query_info": {
-                "longitude": longitude,
-                "latitude": latitude,
-                "limit": limit,
-                "max_distance_meters": max_distance_meters,
-                "min_distance_meters": min_distance_meters,
-                "geo_field": geo_field,
-            }
-        }
-    except Exception as e:
-        logger.error(f"Geospatial search failed: {e}")
-        logger.debug("".join(traceback.format_exception(None, e, e.__traceback__)))
-        return {"error": f"Error executing geospatial_search: {str(e)}"}
 
 @mcp.tool()
 async def get_unique_values(
@@ -268,7 +227,6 @@ async def get_unique_values(
         
     except Exception as e:
         logger.error(f"Get unique values failed: {e}")
-        logger.debug("".join(traceback.format_exception(None, e, e.__traceback__)))
         return {"error":f"Error executing get_unique_values: {str(e)}"}
 
 @mcp.tool()
@@ -281,7 +239,7 @@ async def get_collection_info() -> Dict[str, Any]:
         
     except Exception as e:
         logger.error(f"Get collection info failed: {e}")
-        logger.debug("".join(traceback.format_exception(None, e, e.__traceback__)))
+        traceback.print_exc()
         return {"error":f"Error executing get_collection_info: {str(e)}"}
 
 @mcp.tool()
@@ -327,7 +285,6 @@ async def aggregate_query(
         }
     except PyMongoError as e:
         logger.error(f"Aggregation query failed: {e}")
-        logger.debug("".join(traceback.format_exception(None, e, e.__traceback__)))
         return {"error":f"Error executing aggregation pipeline: {str(e)}"}
     except json.JSONDecodeError as e:
         logger.error(f"JSON serialization failed: {e}")
@@ -342,7 +299,7 @@ async def aggregate_query(
 # We have our tools, mount the mcp to fastapi and setup our fastapi authentication
 # everything after this should be FastAPI endpoints.
 mcp_app = mcp.http_app(path=f"/mcp")
-app = FastAPI(title=settings.TOOL_NAME, lifespan=mcp_app.lifespan)
+app = FastAPI(title=TOOL_NAME, lifespan=mcp_app.lifespan)
 security_token = HTTPBearer()
 optional_token = HTTPBearer(auto_error=False)
 
@@ -401,17 +358,6 @@ async def tool_handler(token: AccessToken, toolname: str, tool_input: dict) -> d
                 num_candidates=tool_input.get("num_candidates", 100),
                 filters=tool_input.get("filters")
             )
-        elif toolname == "geospatial_search":
-            return await geospatial_search.fn(
-                collection=tool_input.get("collection"),
-                longitude=tool_input.get("longitude"),
-                latitude=tool_input.get("latitude"),
-                limit=tool_input.get("limit", 10),
-                max_distance_meters=tool_input.get("max_distance_meters"),
-                min_distance_meters=tool_input.get("min_distance_meters"),
-                filters=tool_input.get("filters"),
-                geo_field=tool_input.get("geo_field", "address.location"),
-            )
         elif toolname == "text_search":
             return await text_search.fn(
                 collection=tool_input.get("collection"),
@@ -435,7 +381,7 @@ async def tool_handler(token: AccessToken, toolname: str, tool_input: dict) -> d
             return {"error": f"Unknown tool: {toolname}"}
     except Exception as e:
         logger.error(f"Tool handler error for {toolname}: {e}")
-        logger.debug("".join(traceback.format_exception(None, e, e.__traceback__)))
+        traceback.print_exc()  # Prints full stack trace
         return {"error": f"Error executing {toolname}: {str(e)}"}
 
 # Root route
@@ -449,8 +395,8 @@ async def root_endpoint(token: Annotated[str | None, Depends(get_optional_token)
             "status": "running",
             "available_tools": mongo_middleware.ALLTOOLS,
             "available_endpoints": [
-                f"/{settings.TOOL_NAME}/health" if settings.TOOL_NAME else None,
-                f"/{settings.TOOL_NAME}/mcp" if settings.TOOL_NAME else "/mcp",
+                f"/{TOOL_NAME}/health" if TOOL_NAME else None,
+                f"/{TOOL_NAME}/mcp" if TOOL_NAME else "/mcp",
                 "/tools_config",
                 "/vectorize"
             ]
@@ -462,7 +408,7 @@ async def root_endpoint(token: Annotated[str | None, Depends(get_optional_token)
         }
 
 # this is for the AWS load balancer health check
-@app.get(f"/{settings.TOOL_NAME}/health")
+@app.get(f"/{TOOL_NAME}/health")
 @app.get("/health")
 async def http_health_check(token: Annotated[str | None, Depends(get_optional_token)]) -> Dict[str, Any]:
     """Regular HTTP GET endpoint for health checks"""
@@ -488,44 +434,44 @@ async def http_get_tools_config(token: Annotated[str, Depends(get_token)]) -> Di
     # list of available active mcp endpoints
     mongo_middleware.load_annotations()
     results = mongo_middleware.ALLTOOLS
-    return {"available_tools": results, "tool_name": settings.TOOL_NAME}
+    return {"available_tools": results, "tool_name": TOOL_NAME}
 
-@app.get(f"/{settings.TOOL_NAME}/collection_info")
+@app.get(f"/{TOOL_NAME}/collection_info")
 async def http_get_collection_info(token: Annotated[str, Depends(get_token)]) -> Dict[str, Any]:
     """Regular HTTP GET endpoint for collection info"""        
     results = await get_collection_info.fn()
     return {"collection_info": results}
 
 
-@app.get(f"/{settings.TOOL_NAME}/reset")
+@app.get(f"/{TOOL_NAME}/reset")
 async def reset_settings(token: Annotated[str, Depends(get_token)]) -> Dict[str, Any]:    
     """
     reload the settings. this will pull new configs from mongo and update the server with any changes
     """ 
-    logger.info(f"Begin settings reset for {settings.TOOL_NAME}")
+    logger.info(f"Begin settings reset for {TOOL_NAME}")
     global llm_client
     llm_client = None
     output = {"action":"reset settings"}
     try:
         setup_from_mongo()
-        llm_client = ServerBedrockClient(settings)
+        llm_client = BedrockClient(settings)
         mcp_tools = await mcp.get_tools()
         tools_config = mongo_middleware.get_llm_tools(mcp_tools)
-        llm_client.configure_tools(tools_config)
+        llm_client.configure_tools(tools_config, tool_handler)        
 
         output["result"] = "success"
-        logger.info(f"Finished settings reset for {settings.TOOL_NAME}: Success")
+        logger.info(f"Finished settings reset for {TOOL_NAME}: Success")
     except Exception as e:
         logger.error(f"reset_settings failed: {e}")
-        logger.debug("".join(traceback.format_exception(None, e, e.__traceback__)))        
+        traceback.print_exc()        
         output["error"] = f"Error executing invoke_llm: {str(e)}"
         output["result"] = "failed"
-        logger.info(f"Finished settings reset for {settings.TOOL_NAME}: Failed")
+        logger.info(f"Finished settings reset for {TOOL_NAME}: Failed")
         return JSONResponse(output, 500)
 
     return output
 
-@app.post(f"/{settings.TOOL_NAME}/prompt/{{prompt_name}}")
+@app.post(f"/{TOOL_NAME}/prompt/{{prompt_name}}")
 async def invoke_llm(prompt_name: str, body: Dict[str, Any], 
                      token: Annotated[str, Depends(get_token)]) -> Dict[str, Any]:    
     """
@@ -557,7 +503,7 @@ async def invoke_llm(prompt_name: str, body: Dict[str, Any],
             # reproduce the tool loading code.
             mcp_tools = await mcp.get_tools()
             tools_config = mongo_middleware.get_llm_tools(mcp_tools)
-            llm_client.configure_tools(tools_config)
+            llm_client.configure_tools(tools_config, tool_handler)
                         
         # Lookup prompt from mongo_server.tool_config["prompts"] if it exists        
         if ("prompts" in mongo_server.tool_config and 
@@ -565,19 +511,8 @@ async def invoke_llm(prompt_name: str, body: Dict[str, Any],
             #We have a prompt!
             prompt = mongo_server.tool_config["prompts"][prompt_name]
             output["prompt"] = prompt
-
-            async def scoped_mcp_call(toolname: str, tool_input: dict) -> dict:
-                # Keep token handling in this top-level request scope.
-                return await tool_handler(token, toolname, tool_input)
-
-            # Bind request-scoped callback on the client instance; BedrockClient no longer
-            # accepts a per-call tool callback parameter.
-            llm_client.mcp_call = scoped_mcp_call
                         
-            resp_obj = await llm_client.invoke_bedrock_with_tools(
-                prompt=prompt,
-                context=json.dumps(context),
-            )
+            resp_obj = await llm_client.invoke_bedrock_with_tools(token, prompt, json.dumps(context), 15)
             output.update(resp_obj)  # merge the response object into output
             
             # lots of potential errors and exceptions here, so catch them all. 
@@ -593,7 +528,7 @@ async def invoke_llm(prompt_name: str, body: Dict[str, Any],
             
             # We want to save the full conversation including LLM output regardless of success or failure
             # Try to handle the exceptions and bubble them up to the output so we don't hit the catches below.
-            mongo_middleware.save_llm_conversation(output, token["agent_key"], settings.TOOL_NAME, prompt_name)
+            mongo_middleware.save_llm_conversation(output, token["agent_key"], TOOL_NAME, prompt_name)
             return return_json
 
         else:            
@@ -606,7 +541,7 @@ async def invoke_llm(prompt_name: str, body: Dict[str, Any],
         return JSONResponse(output,he.status_code)
     except Exception as e:
         logger.error(f"invoke_llm failed: {e}")
-        logger.debug("".join(traceback.format_exception(None, e, e.__traceback__)))        
+        traceback.print_exc()        
         output["error"] = f"Error executing invoke_llm: {str(e)}"
         return JSONResponse(output, 500)
 
@@ -640,7 +575,7 @@ async def vectorize_text(body: Dict[str, Any],
         return JSONResponse(status_code=he.status_code, content={"error": he.detail})
     except Exception as e:
         logger.error(f"Vectorization failed: {e}")
-        logger.debug("".join(traceback.format_exception(None, e, e.__traceback__)))
+        traceback.print_exc()
         input = json.dumps(body)
         return {
             "error": f"Error executing vectorize_text: {str(e)}",
@@ -649,7 +584,7 @@ async def vectorize_text(body: Dict[str, Any],
 
 # we now have all the components and routes. mount the MCP server to FastAPI
 # Mount the MCP server
-app.mount(f"/{settings.TOOL_NAME}", mcp_app)
+app.mount(f"/{TOOL_NAME}", mcp_app)
 
 
 # These are not really used, left them in just in case.
