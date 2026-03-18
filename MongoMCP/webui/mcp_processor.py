@@ -1,14 +1,16 @@
 from typing import Any, List, Optional, Tuple
 import traceback
+import json
+import re
 from pydantic import BaseModel
 from typing import Optional, List, Any
-from .local_settings import settings # change this to use AWS settings 
+from local_settings import settings # change this to use AWS settings 
 from mongoagent.cached_query_processor import CachedQueryProcessor
 import queue
 import threading
 
 class QueryResponse(BaseModel):
-    answer: Optional[str] = None
+    content: Optional[dict] = None
     error: Optional[str] = None
     status: Optional[str] = None
     history: Optional[List[Any]] = None
@@ -16,25 +18,9 @@ class QueryResponse(BaseModel):
     message: Optional[str] = None
 
     def json(self):
-        if self.answer is not None:
-            self.answer = self._sanitize_obj(self.answer)
-        if self.history is not None:
-            self.history = self._sanitize_obj(self.history)
-        if self.cache_stats is not None:
-            self.cache_stats = self._sanitize_obj(self.cache_stats)
-        if self.message is not None:            
-            self.message = self._sanitize_obj(self.message)
+        if self.message is not None:
+            self.message = self.message.replace('\n', ' ').replace('\r', '')
         return self.model_dump_json()
-
-    def _sanitize_obj(self, o):
-        """Recursively remove newline characters from string fields in an object."""
-        if isinstance(o, dict):
-            return {k: self._sanitize_obj(v) for k, v in o.items()}
-        if isinstance(o, list):
-            return [self._sanitize_obj(v) for v in o]
-        if isinstance(o, str):
-            return o.replace('\\n', '').replace('\\r', '')
-        return o
 
 class QueryRequest(BaseModel):
     input: str
@@ -119,5 +105,6 @@ class APIQueryProcessor:
     def query_with_mcp_tools(self, request: QueryRequest) -> QueryResponse:
         """Forward the question to the underlying processor and return (answer, history)."""
         self._ensure_impl()
-        answer, history = self._impl.query_with_mcp_tools(request.input, request.history)
-        return QueryResponse(status="Query Completed",message="Completed", answer=answer, history=history)
+        answer, jsondata, history = self._impl.query_with_mcp_tools(request.input, request.history)
+        content = {"text": answer, "jsondata": jsondata}
+        return QueryResponse(status="Query Completed", message="Completed", content=content, history=history)

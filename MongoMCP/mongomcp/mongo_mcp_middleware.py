@@ -25,13 +25,13 @@ class MongoMCPMiddleware(Middleware):
     """
     def __init__(self, settings):
         super().__init__()
-        self.tool_name = settings.TOOL_NAME
+        self.endpoint_name = settings.TOOL_NAME
         self._is_local = settings.IS_LOCAL
         logger.info("MongoMCPMiddleware initialized")
         self.mongo_client = MongoDBClient(settings)
         self.ANNOTATIONS = None
-        self.ALLTOOLS = [self.tool_name]
-        self.ActiveTools = []
+        self.active_endpoints = [self.endpoint_name]
+        self.endpoint_tools = {}
         self.load_annotations()
         
     def load_annotations(self):
@@ -39,26 +39,27 @@ class MongoMCPMiddleware(Middleware):
         global SHOW_ONCE
         try:
             if self.mongo_client.sync_connect_to_mongodb():
-                #print(f"loading dynamic config for tool {self.tool_name}")      
+                if SHOW_ONCE < 1:
+                    logger.info(f"loading dynamic config for endpoint {self.endpoint_name}")
                 # load the config for this specific tool, then we load it for everything so we can return all tools on the shared endpoint 
                 # make 2 calls because we need this config regardless of active state 
-                doc = self.mongo_client.get_collection().find_one({"Name": self.tool_name})    
+                doc = self.mongo_client.get_collection().find_one({"Name": self.endpoint_name})    
                 self.ANNOTATIONS = doc
-                self.ActiveTools = self.ANNOTATIONS.get('tools', [])
-                #### load all active tools to return configs
+                self.endpoint_tools = self.ANNOTATIONS.get('tools', {})
+                #### load all active endpoints to return configs
                 if self._is_local:
-                    if SHOW_ONCE < 1:
-                        logger.info(f"Running in local mode, loading only the current tool config for {self.tool_name}")
+                    if SHOW_ONCE < 1:                    
+                        logger.info(f"Running in local mode, loading only the current endpoint config for {self.endpoint_name}")
                         SHOW_ONCE += 1
                 else:
-                    self.ALLTOOLS = list(self.mongo_client.get_collection().distinct("Name",{ "active": True}))                
+                    self.active_endpoints = list(self.mongo_client.get_collection().distinct("Name",{ "active": True}))                
 
                 return doc
         except ConnectionError as ce:
-            logger.error(f"MongoDB connection error while loading annotations for tool {self.tool_name}. check IP whitelist, networking etc.:\r\n {ce}")
+            logger.error(f"MongoDB connection error while loading annotations for endpoint {self.endpoint_name}. check IP whitelist, networking etc.:\r\n {ce}")
             return None
         except Exception as e:
-            logger.error(f"Failed to load annotations for tool {self.tool_name}:\r\n {e}")
+            logger.error(f"Failed to load annotations for endpoint {self.endpoint_name}:\r\n {e}")
             return None
 
     def check_authorization(self, token: str):
@@ -107,8 +108,9 @@ class MongoMCPMiddleware(Middleware):
             for tool_name, tool in mcp_tools.items():                
                 # mcp_tools is important because FastMCP has a lot of helper functions that automate the tools response
                 # I just want the output.
-                if not tool_name in self.ActiveTools:
+                if not tool_name in self.endpoint_tools:
                     # the mcp_tools contains all tools, we only want the active ones from our annotations
+                    logger.debug(f"Tool '{tool_name}' not found in endpoint annotations, skipping.")
                     continue                              
                 
                 # Still need to rebuild to match the expected output format
@@ -135,8 +137,8 @@ class MongoMCPMiddleware(Middleware):
                     }
                 }
                 
-                tooslspec = {"toolSpec": tool_obj}
-                tools_dict.append(tooslspec)        
+                toolspec = {"toolSpec": tool_obj}
+                tools_dict.append(toolspec)        
             return tools_dict
         except Exception as e:
             logger.error(f"Error outputting tools JSON: {e}")
@@ -170,8 +172,8 @@ class MongoMCPMiddleware(Middleware):
         """Get annotation data for a specific tool"""
         # load it fresh every time? 
         self.load_annotations()  
-        if tool_name in self.ActiveTools:
-            tool = self.ActiveTools[tool_name]
+        if tool_name in self.endpoint_tools:
+            tool = self.endpoint_tools[tool_name]
             return tool
         return {}
 
@@ -210,7 +212,7 @@ class MongoMCPMiddleware(Middleware):
                     if tool_description:
                         tool.description = tool_description
                     else:
-                        #print(f"No annotation found for tool '{tool.name}'")
+                        print(f"No annotation found for tool '{tool.name}'")
                         remove_tools.append(tool)
                         continue
 

@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import JsonDataRenderer from './JsonDataRenderer'
 
 const API_URL = import.meta.env.VITE_API_URL || ''
 
@@ -8,6 +9,7 @@ export default function App() {
   const [question, setQuestion] = useState('')
   const [history, setHistory] = useState(null)
   const [answer, setAnswer] = useState(null)
+  const [mapData, setMapData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [streamedOutput, setStreamedOutput] = useState('')
@@ -19,6 +21,7 @@ export default function App() {
     setError(null)
     setStreamedOutput('')
     setAnswer(null)
+    setMapData(null)
     setStatus(null)
     setLiveMessage('')
     try {
@@ -39,6 +42,24 @@ export default function App() {
         const decoder = new TextDecoder()
         let buf = ''
 
+        function extractJsonObjects(str) {
+          const objects = []
+          let depth = 0, start = -1
+          for (let i = 0; i < str.length; i++) {
+            if (str[i] === '{') { if (depth === 0) start = i; depth++ }
+            else if (str[i] === '}') {
+              depth--
+              if (depth === 0 && start !== -1) {
+                objects.push(str.slice(start, i + 1))
+                start = -1
+              }
+            }
+          }
+          // return extracted objects and the remaining unparsed tail
+          const tail = depth > 0 && start !== -1 ? str.slice(start) : ''
+          return { objects, tail }
+        }
+
         while (true) {
           const { done, value } = await reader.read()
           if (done) break
@@ -46,14 +67,12 @@ export default function App() {
           const chunk = decoder.decode(value, { stream: true })
           buf += chunk
 
-          // process complete lines (NDJSON)
-          const lines = buf.split('\n')
-          buf = lines.pop() // leftover
+          const { objects, tail } = extractJsonObjects(buf)
+          buf = tail
 
-          for (const line of lines) {
-            if (!line || !line.trim()) continue
+          for (const raw of objects) {
             try {
-              const obj = JSON.parse(line)
+              const obj = JSON.parse(raw)
 
               // If response carries history, replace the history viewer only when it's not null/empty
               if (obj.history !== undefined && obj.history !== null) {
@@ -64,8 +83,11 @@ export default function App() {
               if (obj.message !== undefined) setLiveMessage(String(obj.message))
 
               // Show answer in separate section (not in live output)
-              if (obj.answer !== undefined) {
-                setAnswer(obj.answer)
+              if (obj.content != null) {
+                setAnswer(obj.content.text || null)
+                const jd = obj.content.jsondata
+                if (jd && jd.jsonDataType) setMapData(jd)
+                else setMapData(null)
               }
 
               // Only accumulate messages in live output, not answers
@@ -73,34 +95,35 @@ export default function App() {
                 setStreamedOutput((prev) => (prev ? prev + '\n' : '') + String(obj.message))
               }
             } catch (e) {
-              // Non-JSON line — append raw
-              setStreamedOutput((prev) => prev + line)
+              // ignore malformed objects
             }
           }
         }
 
-        // handle any remaining buffer as final JSON or raw
+        // handle any remaining buffer
         if (buf && buf.trim()) {
-          try {
-            const data = JSON.parse(buf)
-            if (data.history !== undefined && data.history !== null) {
-              const h = data.history
-              const nonEmpty =
-                (typeof h === 'object'
-                  ? Array.isArray(h)
-                    ? h.length > 0
-                    : Object.keys(h).length > 0
-                  : String(h).length > 0)
-              if (nonEmpty) setHistory(h)
-            }
-            if (data.answer !== undefined) setAnswer(data.answer)
-            if (data.status !== undefined) setStatus(data.status)
-            if (data.message !== undefined) {
-              setStreamedOutput((prev) => (prev ? prev + '\n' : '') + String(data.message))
-            }
-          } catch {
-            setStreamedOutput((prev) => prev + buf)
-            setAnswer(buf)
+          const { objects: remaining } = extractJsonObjects(buf)
+          for (const raw of remaining) {
+            try {
+              const data = JSON.parse(raw)
+              if (data.history !== undefined && data.history !== null) {
+                const h = data.history
+                const nonEmpty = typeof h === 'object'
+                  ? Array.isArray(h) ? h.length > 0 : Object.keys(h).length > 0
+                  : String(h).length > 0
+                if (nonEmpty) setHistory(h)
+              }
+              if (data.content != null) {
+                setAnswer(data.content.text || null)
+                const jd = data.content.jsondata
+                if (jd && jd.jsonDataType) setMapData(jd)
+                else setMapData(null)
+              }
+              if (data.status !== undefined) setStatus(data.status)
+              if (data.message !== undefined) {
+                setStreamedOutput((prev) => (prev ? prev + '\n' : '') + String(data.message))
+              }
+            } catch { /* ignore */ }
           }
         }
       } else {
@@ -113,6 +136,7 @@ export default function App() {
         const data = await res2.json()
         if (!res2.ok) throw new Error(data.error || 'API error')
         setAnswer(data.answer || data.message || null)
+        setMapData(null)
         setHistory(data.history || history)
       }
     } catch (e) {
@@ -138,6 +162,7 @@ export default function App() {
       setLiveMessage(data.message || 'History cleared')
       setStreamedOutput('')
       setAnswer(null)
+      setMapData(null)
     } catch (e) {
       setError(String(e))
     } finally {
@@ -206,6 +231,14 @@ export default function App() {
               <strong>Live Output:</strong>
               <pre style={{ whiteSpace: 'pre-wrap', maxHeight: 200, overflow: 'auto' }}>{streamedOutput}</pre>
             </div>
+          </div>
+        </div>
+      )}
+
+      {mapData && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ marginTop: 8 }}>
+            <JsonDataRenderer jsonData={mapData} />
           </div>
         </div>
       )}

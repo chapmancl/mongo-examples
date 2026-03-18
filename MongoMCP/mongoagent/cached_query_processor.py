@@ -103,62 +103,25 @@ class CachedQueryProcessor:
         self.generate_toolconfig()
         self.message_handler("All caches cleared", status="Cache Cleared")
 
-    def invoke_bedrock_with_tools(self, prompt: str) -> str:
-        """
-        Invoke Bedrock with MCP tools support and caching enabled
-        
-        Args:
-            prompt: User prompt to send to the LLM
-            
-        Returns:
-            str: Final assistant response
-        """
-        # Get tools dynamically from MCP server discovery (with caching)
-        self.generate_toolconfig()
-        
-        # Prepare the conversation messages
-        messages = self.history
-        messages.append({
-            "role": "user",
-            "content": [{                
-                "text": prompt
-            }]
-        })
-
-        # Ensure Bedrock progress updates use the current handler instance.
-        self.llm_client.message_handler = self.message_handler
-
-        try:
-            invoke_result = asyncio.run(
-                self._invoke_bedrock_with_mcp_session(messages)
-            )
-        except ClientError as error:
-            error_code = error.response['Error']['Code']
-            print(f"Bedrock error: {error_code} - {error.response['Error']['Message']}")
-            if error_code == 'ValidationException':
-                return "Error: Input validation failed"
-            if error_code in ['ExpiredTokenException', 'ExpiredToken']:
-                raise
-            return f"Error: {error.response['Error']['Message']}"
-        except Exception as e:
-            print(f"Unexpected error in invoke_bedrock_with_tools: {e}")
-            return f"Error: {str(e)}"
-
-        self.history = invoke_result.get("history", messages)
-        return invoke_result.get("response_text", "No response generated")
-
     async def _invoke_bedrock_with_mcp_session(self, messages: list) -> dict:
-        """Keep a single MCP session open while Bedrock executes tool calls."""
+        """Keep a single MCP session open while Bedrock executes tool calls.
+
+        Delegates to WebUiBedrockClient.invoke_bedrock_with_tools_text(), which calls
+        WebUiBedrockClient.invoke_bedrock_with_tools() → super() BedrockClient.invoke_bedrock_with_tools()
+        and then normalizes the raw response into {response_text, jsondata, history}.
+        """
         # Reset Motor connections so they bind to this event loop, not the
         # closed loop used during discovery.
         self._tool_response_cache.reset_connection()
         if self.mcp_client is not None:
+            # Open composite MCP session so tool callbacks can reach all endpoints.
             async with self.mcp_client:
-                return await self.llm_client.invoke_bedrock_with_tools_text(
+                return await self.llm_client.invoke_bedrock_with_tools_text(  # WebUiBedrockClient
                     messages=messages,
                 )
 
-        return await self.llm_client.invoke_bedrock_with_tools_text(
+        # No MCP endpoints configured — still invoke LLM directly.
+        return await self.llm_client.invoke_bedrock_with_tools_text(  # WebUiBedrockClient
             messages=messages,
         )
 
@@ -458,25 +421,52 @@ class CachedQueryProcessor:
  
     def query_with_mcp_tools(self, question: str, history: list or None = None) -> tuple:
         """
-        Query LLM with MCP tool support using Bedrock's Converse API with caching
-        
-        Args:
-            question: User question or full prompt 
-            history: optional list of historical questions and assistant answers
-            
+        Query LLM with MCP tool support using Bedrock's Converse API with caching.
+
+        Prepares history, discovers/caches MCP tools, then runs the async call chain:
+          _invoke_bedrock_with_mcp_session
+            → self.llm_client.invoke_bedrock_with_tools_text  (llm_client is WebUiBedrockClient)
+              → WebUiBedrockClient.invoke_bedrock_with_tools  (WebUiBedrockClient is child class of BedrockClient, formats request)
+                → BedrockClient.invoke_bedrock_with_tools     (base class, actual API call)
+              → normalize_bedrock_response                    (WebUiBedrockClient splits text / jsondata)
+
         Returns:
-            tuple: (assistant response (str), updated history (list))
+            tuple: (answer: str, jsondata: dict|None, history: list)
         """
-        
-        # Update history if provided
         if history:
             self.history = history
         if self.history is None:
             self.history = []
-        
-        # Invoke Bedrock with MCP tools and caching
-        assistant_message = self.invoke_bedrock_with_tools(question)
-        return assistant_message, self.history
+
+        # Ensure tools are discovered (cached after first call).
+        self.generate_toolconfig()
+
+        messages = self.history
+        messages.append({"role": "user", "content": [{"text": question}]})
+
+        # Bind the current message handler so Bedrock progress events route correctly.
+        self.llm_client.message_handler = self.message_handler
+
+        try:
+            invoke_result = asyncio.run(
+                self._invoke_bedrock_with_mcp_session(messages)
+            )
+        except ClientError as error:
+            error_code = error.response['Error']['Code']
+            print(f"Bedrock error: {error_code} - {error.response['Error']['Message']}")
+            if error_code == 'ValidationException':
+                return "Error: Input validation failed", None, self.history
+            if error_code in ['ExpiredTokenException', 'ExpiredToken']:
+                raise
+            return f"Error: {error.response['Error']['Message']}", None, self.history
+        except Exception as e:
+            print(f"Unexpected error invoking Bedrock: {e}")
+            return f"Error: {str(e)}", None, self.history
+
+        self.history = invoke_result.get("history", messages)
+        answer = invoke_result.get("response_text", "No response generated")
+        jsondata = invoke_result.get("jsondata", None)
+        return answer, jsondata, self.history
 
     def get_cache_stats(self) -> dict:
         """Get cache statistics for monitoring"""
