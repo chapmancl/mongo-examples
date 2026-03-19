@@ -15,10 +15,9 @@ from .mongodb_client import MongoDBClient
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class MongoDBVectorServer(MongoDBClient):
+class MongoDBQueryServer(MongoDBClient):
     """
     MongoDB wrapper class translates MCP Server functions to MongoDB operations.
-    This started as just vector, now has some additional search capabilities.
     """
     def __init__(self, settings):
         super().__init__(settings=settings)
@@ -284,7 +283,7 @@ class MongoDBVectorServer(MongoDBClient):
             if self.tool_config:
                 geo_config = self.tool_config.get("tools", {}).get("geospatial_search", {})
 
-            resolved_geo_field = geo_field or geo_config.get("location_field", "address.location")
+            resolved_geo_field = geo_field or geo_config.get("location_field")
 
             geo_near_stage = {
                 "$geoNear": {

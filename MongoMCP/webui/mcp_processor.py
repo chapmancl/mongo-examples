@@ -4,7 +4,8 @@ import json
 import re
 from pydantic import BaseModel
 from typing import Optional, List, Any
-from local_settings import settings # change this to use AWS settings 
+#from local_settings import settings # change this to use AWS settings 
+from aws_settings import settings
 from mongoagent.cached_query_processor import CachedQueryProcessor
 import queue
 import threading
@@ -101,6 +102,13 @@ class APIQueryProcessor:
     def get_cache_stats(self) -> QueryResponse:
         self._ensure_impl()
         return QueryResponse(status="Get Cache stats", message="Completed", cache_stats=self._impl.get_cache_stats(), history=self._impl.history)
+
+    def get_mcp_config(self) -> dict:
+        self._ensure_impl()
+        return {
+            "endpoints": self._impl.mcp_endpoints or [],
+            "collection_info": self._impl.mongo_collection_info or {},
+        }
 
     def query_with_mcp_tools(self, request: QueryRequest) -> QueryResponse:
         """Forward the question to the underlying processor and return (answer, history)."""

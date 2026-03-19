@@ -1,5 +1,4 @@
 import json
-import time
 from typing import Any, Dict, List, Optional, Annotated
 import logging
 from pydantic import Field
@@ -7,13 +6,11 @@ from pymongo.errors import PyMongoError
 from fastmcp import FastMCP
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastmcp.dependencies import CurrentContext
 from fastmcp.server.dependencies import AccessToken, get_access_token
-from fastmcp.server.context import Context
 from starlette.responses import JSONResponse
-#from AWS_settings import settings 
-from local_settings import settings # change this to use AWS_settings
-from mongomcp import MongoDBVectorServer, MongoMCPMiddleware, ServerBedrockClient, MongoTokenVerifier
+from AWS_settings import settings 
+#from local_settings import settings # change this to use AWS_settings
+from mongomcp import MongoDBQueryServer, MongoMCPMiddleware, ServerBedrockClient, MongoTokenVerifier
 import traceback
 import sys
 
@@ -24,16 +21,16 @@ logger = logging.getLogger(__name__)
 """
 main component flow:
 1. MongoMCPMiddleware: Connects to MongoDB config database, loads tool configurations, and prep token authorization.
-2. MongoDBVectorServer: Implements core MongoDB query functionalities for the specific tool_name from env
+2. MongoDBQueryServer: Implements core MongoDB query functionalities for the specific tool_name from env
 3. BedrockClient: Handles AWS Bedrock LLM interactions and tool integrations.
-4. instantiate FastMCP server with MongoMCPMiddleware, MongoDBVectorServer, MongoTokenVerifier
+4. instantiate FastMCP server with MongoMCPMiddleware, MongoDBQueryServer, MongoTokenVerifier
 5. instantiate FastAPI app, mounts FastMCP app
 6. define additional endpoints for health checks, tool configuration retrieval, settings reset, LLM invocation, and text vectorization.
 
 """
 
 mongo_middleware: MongoMCPMiddleware
-mongo_server: MongoDBVectorServer
+mongo_server: MongoDBQueryServer
 auth_provider = None
 
 def setup_from_mongo():
@@ -49,15 +46,14 @@ def setup_from_mongo():
     mongo_server = None
     auth_provider = None
     failed = False
-    error = None
+    error = None  # captured on ConnectionError, used in failure log
 
     # load or reload the mongo middleware and server config
     # we do this to get fresh settings from mongo if reset_settings is called
     try:
         mongo_middleware = MongoMCPMiddleware(settings)
         if mongo_middleware.ANNOTATIONS:
-            # Initialize the MongoDB vector server
-            mongo_server = MongoDBVectorServer(settings)
+            mongo_server = MongoDBQueryServer(settings)
             mongo_server.set_config(mongo_middleware.ANNOTATIONS)
             auth_provider = MongoTokenVerifier(mongo_middleware)
         else:
@@ -66,7 +62,7 @@ def setup_from_mongo():
         failed = True
         error = e
     if failed:
-        logger.error(f"Failed to get configuration from MongoDB. Will wait for 10s before retry.\r\n {KeyError}")
+        logger.error(f"Failed to get configuration from MongoDB. Will wait for 10s before retry.\r\n {error}")
         #time.sleep(10)
         sys.exit(1)
 
@@ -191,7 +187,7 @@ async def geospatial_search(
     max_distance_meters: Annotated[Optional[float], Field(default=None, description="Optional maximum distance from the center point in meters.", ge=0)] = None,
     min_distance_meters: Annotated[Optional[float], Field(default=None, description="Optional minimum distance from the center point in meters.", ge=0)] = None,
     filters: Annotated[Optional[List], Field(default=None, description="Optional list of filters in [field, value] format.")] = None,
-    geo_field: Annotated[str, Field(default="address.location", description="GeoJSON point field path with a 2dsphere index.")] = "address.location"
+    geo_field: Annotated[Optional[str], Field(default=None, description="GeoJSON point field path with a 2dsphere index. Defaults to the location_field defined in the tool config.")] = None
 ) -> Dict[str, Any]:
     """Dynamic docstring loaded from JSON configuration"""
     try:
@@ -407,10 +403,10 @@ async def tool_handler(token: AccessToken, toolname: str, tool_input: dict) -> d
                 longitude=tool_input.get("longitude"),
                 latitude=tool_input.get("latitude"),
                 limit=tool_input.get("limit", 10),
-                max_distance_meters=tool_input.get("max_distance_meters"),
-                min_distance_meters=tool_input.get("min_distance_meters"),
-                filters=tool_input.get("filters"),
-                geo_field=tool_input.get("geo_field", "address.location"),
+                max_distance_meters=tool_input.get("max_distance_meters", None),
+                min_distance_meters=tool_input.get("min_distance_meters", None),
+                filters=tool_input.get("filters", None),
+                geo_field=tool_input.get("geo_field"),
             )
         elif toolname == "text_search":
             return await text_search.fn(
@@ -443,16 +439,19 @@ async def tool_handler(token: AccessToken, toolname: str, tool_input: dict) -> d
 async def root_endpoint(token: Annotated[str | None, Depends(get_optional_token)]) -> Dict[str, Any]:
     """Root endpoint"""
     if token:
-        mongo_middleware.load_annotations()  # Ensure annotations are loaded
         return {
             "message": "MongoDB Vector Server MCP",
             "status": "running",
-            "available_tools": mongo_middleware.ALLTOOLS,
+            "available_tools": mongo_middleware.active_endpoints,
             "available_endpoints": [
-                f"/{settings.TOOL_NAME}/health" if settings.TOOL_NAME else None,
-                f"/{settings.TOOL_NAME}/mcp" if settings.TOOL_NAME else "/mcp",
-                "/tools_config",
-                "/vectorize"
+                f"GET  /{settings.TOOL_NAME}/health",
+                f"GET  /{settings.TOOL_NAME}/mcp",
+                f"GET  /{settings.TOOL_NAME}/collection_info",
+                f"GET  /{settings.TOOL_NAME}/llm_tools",
+                f"GET  /{settings.TOOL_NAME}/reset",
+                f"POST /{settings.TOOL_NAME}/prompt/{{prompt_name}}",
+                "GET  /tools_config",
+                "POST /vectorize",
             ]
         }
     else:
@@ -484,11 +483,7 @@ async def http_health_check(token: Annotated[str | None, Depends(get_optional_to
 @app.get("/tools_config")
 async def http_get_tools_config(token: Annotated[str, Depends(get_token)]) -> Dict[str, Any]:
     """Regular HTTP GET endpoint for tools config"""
-
-    # list of available active mcp endpoints
-    mongo_middleware.load_annotations()
-    results = mongo_middleware.ALLTOOLS
-    return {"available_tools": results, "tool_name": settings.TOOL_NAME}
+    return {"available_tools": mongo_middleware.active_endpoints, "tool_name": settings.TOOL_NAME}
 
 @app.get(f"/{settings.TOOL_NAME}/collection_info")
 async def http_get_collection_info(token: Annotated[str, Depends(get_token)]) -> Dict[str, Any]:
@@ -497,28 +492,30 @@ async def http_get_collection_info(token: Annotated[str, Depends(get_token)]) ->
     return {"collection_info": results}
 
 
+@app.get(f"/{settings.TOOL_NAME}/llm_tools")
+async def http_get_llm_tools(token: Annotated[str, Depends(get_token)]) -> Dict[str, Any]:
+    """Returns preformatted Bedrock toolSpec JSON for all active tools with MongoDB annotations applied."""
+    tools = mongo_middleware.build_tools_from_annotations()
+    return {"tools": tools, "count": len(tools)}
+
+
 @app.get(f"/{settings.TOOL_NAME}/reset")
 async def reset_settings(token: Annotated[str, Depends(get_token)]) -> Dict[str, Any]:    
-    """
-    reload the settings. this will pull new configs from mongo and update the server with any changes
-    """ 
+    """Reload config from MongoDB and reconfigure the LLM client with the latest tool annotations."""
     logger.info(f"Begin settings reset for {settings.TOOL_NAME}")
-    global llm_client
-    llm_client = None
-    output = {"action":"reset settings"}
+    output = {"action": "reset settings"}
     try:
         setup_from_mongo()
-        llm_client = ServerBedrockClient(settings)
-        mcp_tools = await mcp.get_tools()
-        tools_config = mongo_middleware.get_llm_tools(mcp_tools)
-        llm_client.configure_tools(tools_config)
-
+        new_client = ServerBedrockClient(settings)
+        new_client.configure_tools(mongo_middleware.build_tools_from_annotations())
+        global llm_client
+        llm_client = new_client
         output["result"] = "success"
         logger.info(f"Finished settings reset for {settings.TOOL_NAME}: Success")
     except Exception as e:
         logger.error(f"reset_settings failed: {e}")
-        logger.debug("".join(traceback.format_exception(None, e, e.__traceback__)))        
-        output["error"] = f"Error executing invoke_llm: {str(e)}"
+        logger.debug("".join(traceback.format_exception(None, e, e.__traceback__)))
+        output["error"] = f"Error executing reset_settings: {str(e)}"
         output["result"] = "failed"
         logger.info(f"Finished settings reset for {settings.TOOL_NAME}: Failed")
         return JSONResponse(output, 500)
@@ -551,12 +548,7 @@ async def invoke_llm(prompt_name: str, body: Dict[str, Any],
         # this will finish the setup next time an invoke is called.
         global llm_client
         if not llm_client.llm_setup:
-            # need the mongo middleware annotations first to get the prompts
-            mongo_middleware.load_annotations()
-            # this feels circular, but we need to ensure the LLM client is configured with tools, and I didn't want to 
-            # reproduce the tool loading code.
-            mcp_tools = await mcp.get_tools()
-            tools_config = mongo_middleware.get_llm_tools(mcp_tools)
+            tools_config = mongo_middleware.build_tools_from_annotations()
             llm_client.configure_tools(tools_config)
                         
         # Lookup prompt from mongo_server.tool_config["prompts"] if it exists        

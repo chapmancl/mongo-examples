@@ -1,5 +1,4 @@
 import json
-import re
 from typing import Any, Dict, List, Optional
 from mongomcp.bedrock_client import BedrockClient
 
@@ -12,14 +11,8 @@ def _remove_json_block(text: str):
     start_idx = text.find(JSON_DATA_START)
     end_idx = text.find(JSON_DATA_END)
     if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-        #json_str = text[start_idx + len(JSON_DATA_START):end_idx].strip()
         clean = (text[:start_idx] + text[end_idx + len(JSON_DATA_END):]).strip()
-        # Strip markdown code fences if present
-        #json_str = re.sub(r'^```[a-zA-Z]*\n?', '', json_str).rstrip('`').strip()
-        try:
-            return clean
-        except Exception:
-            return clean
+        return clean
     return text.strip()
 
 class WebUiBedrockClient(BedrockClient):

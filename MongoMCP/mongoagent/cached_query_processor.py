@@ -30,6 +30,8 @@ class CachedQueryProcessor:
     4. Conversation history caching
     """
 
+    _CACHE_VERSION = "v2"  # Bump when tool discovery cache schema changes to auto-invalidate stale entries
+
     def __init__(self, settings, message_handler: Optional[callable] = None):
         """Initializes the CachedQueryProcessor with caching configuration"""
         # Conversation history (starts empty)
@@ -50,15 +52,6 @@ class CachedQueryProcessor:
             'Authorization': f'Bearer {settings.AUTH_TOKEN}',
             'Content-Type': 'application/json' 
         }        
-        # Initialize caching system
-
-
-        #self._tool_discovery_cache = SimpleCache(
-        #    getattr(settings, "TOOL_DISCOVERY_CACHE_TTL", 300)
-        #)
-        #self._tool_response_cache = SimpleCache(
-        #    getattr(settings, "TOOL_RESPONSE_CACHE_TTL", 60)
-        #)
         self._tool_discovery_cache = MongoSessionCache(
             username="default_user",
             session_id="default_session",
@@ -162,194 +155,106 @@ class CachedQueryProcessor:
         self.message_handler(f"Response for {tool_name}", status="LLM Reasoning...")
         return result
 
-    def discover_mcp_tools(self) -> dict:
-        """
-        Discover available MCP tools from the server, using a single event loop
-        for both the Mongo cache I/O and the async MCP session to avoid Motor
-        client binding to a closed loop.
-        """
-        cache_key = "mcp_tools_discovery"
-        try:
-            return asyncio.run(self._discover_mcp_tools_async(cache_key))
-        except Exception as e:
-            self.message_handler(f"Error discovering MCP tools: {e}", status="Error")
-            return {"error": str(e), "tools": []}
+    def generate_toolconfig(self) -> list:
+        """Discover and configure Bedrock tools from the MCP server HTTP APIs. Idempotent — no-op if already configured."""
+        if not self.mcp_tools_config:
+            asyncio.run(self._setup_tools_async())
+        return self.mcp_tools_config
 
-    def _restore_endpoint_state(self, cached: dict) -> None:
-        """Restore instance endpoint state from a previously cached discovery payload."""
-        self.mcp_endpoints = cached.get("endpoints", [])
-        self.mcp_endpoint_configs = cached.get("endpoint_configs", {})
-        self.mongo_collection_info = cached.get("collection_info", {})
-        # Rebuild the composite fastmcp client config so _call_mcp_tool can open sessions.
-        self.mcp_tools_config = {"mcpServers": {
-            name: cfg for name, cfg in self.mcp_endpoint_configs.items()
-        }}
-        self.mcp_client = fastmcp.Client(self.mcp_tools_config) if self.mcp_endpoint_configs else None
+    async def _setup_tools_async(self) -> None:
+        """Fetch endpoints, Bedrock-formatted tools, and collection info from the MCP HTTP APIs.
 
-    async def _discover_mcp_tools_async(self, cache_key: str) -> dict:
-        """Single-loop async wrapper: cache check → endpoint HTTP fetch → MCP discovery → cache write."""
+        Calls /tools_config to list endpoints, then /{endpoint}/llm_tools and
+        /{endpoint}/collection_info for each. No MCP session is needed for discovery —
+        the server-side annotation pipeline handles all formatting.
+        Results are written to cache; on a cache hit, _apply_cached_state() restores everything.
+        """
         self._tool_discovery_cache.reset_connection()
+        cache_key = "mcp_tools_discovery"
+
         if self.enable_mcp_tool_caching:
             cached = await self._tool_discovery_cache.get(cache_key)
             if cached is not None:
-                self.message_handler("Using cached MCP tools discovery")
-                self._restore_endpoint_state(cached)
-                return cached
+                if cached.get("cache_version") == self._CACHE_VERSION:
+                    self.message_handler("Using cached MCP tools discovery")
+                    self._apply_cached_state(cached)
+                    return
+                self.message_handler("Stale tool discovery cache (version mismatch), re-fetching", status="Discovering Tools")
+                await self._tool_discovery_cache.clear()
 
-        # Sync HTTP fetch to resolve available endpoint names.
-        tools_url = f"{self.settings.mongo_mcp_root}/"
-        self.message_handler(f"Discovering MCP endpoints from {tools_url}", status="Discovering Tools")
+        # Resolve available endpoint names from the server
         try:
-            response = requests.get(tools_url, headers=self._headers)
+            response = requests.get(f"{self.settings.mongo_mcp_root}/tools_config", headers=self._headers)
             response.raise_for_status()
-            jdoc = response.json()
-            self.mcp_endpoints = jdoc.get("available_tools", [])
+            self.mcp_endpoints = response.json().get("available_tools", [])
+            self.message_handler(f"Discovered endpoints: {self.mcp_endpoints}", status="Discovering Tools")
         except requests.RequestException as e:
-            self.message_handler(f"Error making web request to {tools_url}: {e}", status="Error")
+            self.message_handler(f"Error fetching endpoint list: {e}", status="Error")
+            self.mcp_endpoints = []
 
-        result = await self._discover_endpoint_tools()
+        bedrock_tools = []
+        root_frmt = f"{self.settings.mongo_mcp_root}/{{}}/mcp"
 
-        if self.enable_mcp_tool_caching and "error" not in result:
-            # Persist endpoint metadata alongside the tool list so it can be restored on cache hit.
-            result["endpoints"] = self.mcp_endpoints
-            result["endpoint_configs"] = self.mcp_endpoint_configs
-            result["collection_info"] = self.mongo_collection_info
-            await self._tool_discovery_cache.set(cache_key, result)
-
-        return result
-    
-    async def _discover_endpoint_tools(self) -> dict:
-        """
-        Async method to discover multiple mcp server endpoints and associated MCP tools
-        this builds the required config for the fastmcp client and gets the tool and resource lists from each server assembling them together.
-        
-        Returns:
-            dict: Dictionary containing available endpoints, tools, and their schemas
-        """
-        try:
-            root_frmt = f"{self.settings.mongo_mcp_root}/{{}}/mcp"
-            self.mcp_tools_config = {"mcpServers": {}}
-            self.mcp_endpoint_configs = {}
-            self.endpoint_clients = {}
-            tools = []
-            resources = []
-
-            for name in self.mcp_endpoints:                
-                endpoint = root_frmt.format(name)
-                endpoint_config = {
-                    "url": endpoint,
-                    "transport": "http",
-                    "headers": {"Authorization": f"Bearer {self.settings.AUTH_TOKEN}"}
-                }
-                self.mcp_tools_config["mcpServers"][name] = endpoint_config
-                self.mcp_endpoint_configs[name] = endpoint_config
-                # we're going to call get_collection info here so we don't need to have the LLM do it later.
-                # this is a web API request that is separate from the MCP tool calls so we can cache 
-                # the results for LLM access later
-                self.mongo_collection_info[name] = {}
-                try:
-                    response = requests.get(f"{self.settings.mongo_mcp_root}/{name}/collection_info", headers=self._headers)
-                    response.raise_for_status()
-                    jdoc = response.json()
-                    collection_info = jdoc.get("collection_info", None)
-                    if collection_info:
-                        self.mongo_collection_info[name] = collection_info
-                except Exception as e:
-                    await self.async_message_handler(f"Error getting collection info for {name}: {e}", status="Error")
-                    traceback.print_exc()
-
-            # Use one composite session to discover tools/resources across all endpoints.
-            self.mcp_client = fastmcp.Client(self.mcp_tools_config)
-            async with self.mcp_client as session:
-                await session.ping()
-                try:
-                    tools_response = await session.list_tools()
-                    await self.async_message_handler(
-                        f"Discovered {len(tools_response)} tools from MCP server at {self.mcp_endpoints}",
-                        status="Tools Discovered"
-                    )
-                    for t in tools_response:
-                        tools.append({
-                            "name": t.name,
-                            "description": t.description,
-                            "input_schema": t.inputSchema,
-                            "annotation": t.annotations
-                        })
-                except Exception as e:
-                    await self.async_message_handler(f"Error listing tools: {e}", status="Error")
-                    traceback.print_exc()
-                '''
-                # List available resources
-                try:
-                    resources_response = await session.list_resources()
-                    resources.extend([
-                        {
-                            "uri": resource.uri,
-                            "name": resource.name,
-                            "description": resource.description,
-                            "mime_type": resource.mimeType
-                        }
-                        for resource in resources_response
-                    ])
-                except Exception as e:
-                    await self.async_message_handler(f"Error listing resources: {e}", status="Error")
-                '''
-                    
-            return {
-                "tools": tools,
-                "resources": resources
+        for name in self.mcp_endpoints:
+            # Build fastmcp client config used by _call_mcp_tool for actual tool execution
+            self.mcp_endpoint_configs[name] = {
+                "url": root_frmt.format(name),
+                "transport": "http",
+                "headers": {"Authorization": f"Bearer {self.settings.AUTH_TOKEN}"}
             }
-        
-        except Exception as e:
-            await self.async_message_handler(f"Failed to discover MCP tools: {e}", status="Error")   
-            traceback.print_exc()                     
-            return {"error": str(e), "tools": [], "resources": []}
 
-        
-    def generate_toolconfig(self) -> list:
-        """
-        Get Bedrock-formatted tools from MCP server discovery with caching
-        
-        Returns:
-            list: List of tools in Bedrock toolSpec format
-        """
-        if not self.mcp_tools_config:            
-            mcp_info = self.discover_mcp_tools()
-            bedrock_tools = []
-            
-            if "error" in mcp_info:
-                self.message_handler(f"MCP discovery failed {mcp_info['error']}", status="Error")
-                self.message_handler(str(mcp_info), status="Error")                
+            # Fetch pre-formatted Bedrock toolSpec via the server annotation API
+            try:
+                resp = requests.get(f"{self.settings.mongo_mcp_root}/{name}/llm_tools", headers=self._headers)
+                resp.raise_for_status()
+                tools = resp.json().get("tools", [])
+                bedrock_tools.extend(tools)
+                self.message_handler(f"Fetched {len(tools)} tools from {name}", status="Tools Discovered")
+            except Exception as e:
+                self.message_handler(f"Error fetching tools for {name}: {e}", status="Error")
 
-            for tool in mcp_info.get("tools", []):
-                bedrock_tool = {
-                    "toolSpec": {
-                        "name": tool["name"],
-                        "description": tool["description"],
-                        "inputSchema": {
-                            "json": tool["input_schema"]
-                        }
-                    }
-                }
-                bedrock_tools.append(bedrock_tool)
-            
-            # build out a set of toplevel directives for the LLM based on the collection info from each server, 
-            # this will help guide the LLM to use vector search appropriately and understand the capabilities of each collection.
-            # this also controls the output format
-            if self.mongo_collection_info is not None:
-                self._system_prompt = [
-                    {"text": prompt_text}
-                    for prompt_text in getattr(self.settings, "BEDROCK_SYSTEM_PROMPT_TEXTS", [])
-                ]
-                self._system_prompt.append({"text": json.dumps(self.mongo_collection_info)})
+            # Fetch collection info for the LLM system prompt
+            self.mongo_collection_info[name] = {}
+            try:
+                resp = requests.get(f"{self.settings.mongo_mcp_root}/{name}/collection_info", headers=self._headers)
+                resp.raise_for_status()
+                self.mongo_collection_info[name] = resp.json().get("collection_info", {})
+            except Exception as e:
+                self.message_handler(f"Error fetching collection info for {name}: {e}", status="Error")
 
-            self.llm_client.system = self._system_prompt
+        if self.mcp_endpoint_configs:
+            self.mcp_client = fastmcp.Client({"mcpServers": self.mcp_endpoint_configs})
 
-            self.mcp_tools_config = bedrock_tools        
-            self.llm_client.configure_tools(self.mcp_tools_config, self._execute_mcp_tool_cached_async)
-            self.message_handler(f"Using {len(bedrock_tools)} tools discovered from MCP server", status="Tools Ready")
+        self._configure_llm_client(bedrock_tools)
+        self.message_handler(f"Using {len(bedrock_tools)} tools from {len(self.mcp_endpoints)} endpoint(s)", status="Tools Ready")
 
-        return self.mcp_tools_config
+        if self.enable_mcp_tool_caching:
+            await self._tool_discovery_cache.set(cache_key, {
+                "cache_version": self._CACHE_VERSION,
+                "endpoints": self.mcp_endpoints,
+                "endpoint_configs": self.mcp_endpoint_configs,
+                "collection_info": self.mongo_collection_info,
+                "tools": bedrock_tools,
+            })
+
+    def _apply_cached_state(self, cached: dict) -> None:
+        """Restore full instance state — endpoints, tools, and LLM client — from a cached discovery payload."""
+        self.mcp_endpoints = cached.get("endpoints", [])
+        self.mcp_endpoint_configs = cached.get("endpoint_configs", {})
+        self.mongo_collection_info = cached.get("collection_info", {})
+        self.mcp_client = fastmcp.Client({"mcpServers": self.mcp_endpoint_configs}) if self.mcp_endpoint_configs else None
+        self._configure_llm_client(cached.get("tools", []))
+
+    def _configure_llm_client(self, bedrock_tools: list) -> None:
+        """Set the system prompt and register tools on the LLM client."""
+        self._system_prompt = [
+            {"text": t}
+            for t in getattr(self.settings, "BEDROCK_SYSTEM_PROMPT_TEXTS", [])
+        ]
+        self._system_prompt.append({"text": json.dumps(self.mongo_collection_info)})
+        self.llm_client.system = self._system_prompt
+        self.mcp_tools_config = bedrock_tools
+        self.llm_client.configure_tools(self.mcp_tools_config, self._execute_mcp_tool_cached_async)
 
 
     async def _call_mcp_tool(self, toolname: str, tool_input: dict) -> str:
@@ -419,7 +324,7 @@ class CachedQueryProcessor:
             traceback.print_exc()
             raise
  
-    def query_with_mcp_tools(self, question: str, history: list or None = None) -> tuple:
+    def query_with_mcp_tools(self, question: str, history: Optional[list] = None) -> tuple:
         """
         Query LLM with MCP tool support using Bedrock's Converse API with caching.
 
@@ -471,11 +376,11 @@ class CachedQueryProcessor:
     def get_cache_stats(self) -> dict:
         """Get cache statistics for monitoring"""
         return {
-            "tool_discovery_cache_size": len(self._tool_discovery_cache._cache),
-            "tool_response_cache_size": len(self._tool_response_cache._cache),
             "caching_enabled": {
                 "bedrock": self.llm_client.enable_cache_points,
                 "mcp_tools": self.enable_mcp_tool_caching,
                 "responses": self.enable_response_caching
-            }
+            },
+            "endpoints_configured": len(self.mcp_endpoint_configs),
+            "tools_configured": len(self.mcp_tools_config) if self.mcp_tools_config else 0,
         }

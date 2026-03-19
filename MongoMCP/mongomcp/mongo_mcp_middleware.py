@@ -1,4 +1,3 @@
-from fastmcp.tools import Tool
 from fastmcp.server.middleware.middleware import Middleware, MiddlewareContext, CallNext
 from typing import List, Dict, Any
 import mcp.types as mt    
@@ -52,7 +51,10 @@ class MongoMCPMiddleware(Middleware):
                         logger.info(f"Running in local mode, loading only the current endpoint config for {self.endpoint_name}")
                         SHOW_ONCE += 1
                 else:
-                    self.active_endpoints = list(self.mongo_client.get_collection().distinct("Name",{ "active": True}))                
+                    self.active_endpoints = list(self.mongo_client.get_collection().distinct("Name",{ "active": True}))
+                    if SHOW_ONCE < 1:                    
+                        logger.info(f"Running in dynamic mode, loading all available endpoint configs for endpoints: {self.active_endpoints}")
+                        SHOW_ONCE += 1
 
                 return doc
         except ConnectionError as ce:
@@ -101,48 +103,77 @@ class MongoMCPMiddleware(Middleware):
 
         return (allowed, agent_rec)
 
-    def get_llm_tools(self, mcp_tools: Dict[str, Tool]) -> Any:
-        """local function which outputs JSON from get_tools for internal LLM tool configuration"""    
-        try:            
-            tools_dict = []
-            for tool_name, tool in mcp_tools.items():                
-                # mcp_tools is important because FastMCP has a lot of helper functions that automate the tools response
-                # I just want the output.
-                if not tool_name in self.endpoint_tools:
-                    # the mcp_tools contains all tools, we only want the active ones from our annotations
-                    logger.debug(f"Tool '{tool_name}' not found in endpoint annotations, skipping.")
-                    continue                              
-                
-                # Still need to rebuild to match the expected output format
-                # output from this is the expected intput for the LLM tool config
-                props = {}
-                required = []
-                ret_type = "object"
-                for prop_name, prop in tool.parameters.items():
-                    if prop_name == "properties":
-                        props = prop
-                    elif prop_name == "required":
-                        required = prop
-                    elif prop_name == "type":  
-                        ret_type = prop
+    _PYTHON_TO_JSON_SCHEMA_TYPE = {
+        "str": "string",
+        "int": "integer",
+        "float": "number",
+        "bool": "boolean",
+        "list": "array",
+        "List": "array",
+        "dict": "object",
+        "Dict": "object",
+    }
 
-                tool_obj = {
-                    "name": tool_name,
-                    "description": tool.description,
-                    "inputSchema": {
-                    "json": {"properties": props,
-                                "required": required,
-                                "type": ret_type                           
-                            }
+    def _python_type_to_json_schema(self, type_str: str) -> str:
+        """Map a Python type annotation string (from MongoDB annotations) to a JSON Schema type."""
+        if not type_str:
+            return "string"
+        t = type_str.strip()
+        if t.startswith("Optional["):
+            t = t[9:-1].strip()
+        if t.startswith("List"):
+            return "array"
+        if t.startswith("Dict"):
+            return "object"
+        return self._PYTHON_TO_JSON_SCHEMA_TYPE.get(t, "string")
+
+    def build_tools_from_annotations(self) -> List[Dict]:
+        """Build Bedrock toolSpec JSON entirely from MongoDB annotations.
+
+        Requires no FastMCP introspection — all tool names, descriptions, parameter
+        types, defaults, and required lists come directly from the MongoDB config
+        collection. Call this instead of get_llm_tools()/get_formatted_llm_tools()
+        wherever you previously needed to first call mcp.get_tools().
+
+        Returns:
+            List of dicts in Bedrock toolSpec format, ready for LLM consumption.
+        """
+        self.load_annotations()
+        tools_dict = []
+        try:
+            for tool_name, anot in self.endpoint_tools.items():
+                description = anot.get("description", f"Tool: {tool_name}")
+                returns = anot.get("returns")
+                if returns:
+                    description += f"\n\nReturns:\n\t{returns}"
+
+                properties = {}
+                for p_name, p_info in anot.get("parameters", {}).items():
+                    json_type = self._python_type_to_json_schema(p_info.get("type", "str"))
+                    prop = {
+                        "type": json_type,
+                        "description": p_info.get("description", ""),
                     }
-                }
-                
-                toolspec = {"toolSpec": tool_obj}
-                tools_dict.append(toolspec)        
-            return tools_dict
+                    if "default" in p_info and p_info["default"] is not None:
+                        prop["default"] = p_info["default"]
+                    properties[p_name] = prop
+
+                tools_dict.append({
+                    "toolSpec": {
+                        "name": tool_name,
+                        "description": description,
+                        "inputSchema": {
+                            "json": {
+                                "type": "object",
+                                "properties": properties,
+                                "required": anot.get("required", []),
+                            }
+                        }
+                    }
+                })
         except Exception as e:
-            logger.error(f"Error outputting tools JSON: {e}")
-            return {"error": f"Failed to serialize tools: {str(e)}"}
+            logger.error(f"Error building tools from annotations: {e}")
+        return tools_dict
 
     def save_llm_conversation(self, conversation_data: Dict[str, Any], agent_id: str, tool_name: str, prompt_name: str) -> bool:
         """Save LLM conversation data to MongoDB"""
@@ -167,31 +198,6 @@ class MongoMCPMiddleware(Middleware):
             logger.error(f"Failed to save LLM conversation: {e}")
             return False
 
-    # Get tool annotation by name
-    def get_tool_annotation(self, tool_name: str) -> Dict:
-        """Get annotation data for a specific tool"""
-        # load it fresh every time? 
-        self.load_annotations()  
-        if tool_name in self.endpoint_tools:
-            tool = self.endpoint_tools[tool_name]
-            return tool
-        return {}
-
-    def generate_docstring(self, tool_name: str) -> str:
-        """Generate docstring for a tool from JSON annotation"""
-        tool_info = self.get_tool_annotation(tool_name)
-        if not tool_info:
-            return None
-        
-        docstring = tool_info.get("description", f"Tool: {tool_name}")
-        
-        # Add returns information if available
-        returns = tool_info.get("returns")
-        if returns:
-            docstring += f"\n\nReturns:\n    {returns}"
-        
-        return docstring
-
     async def on_list_prompts(self, context, call_next):        
         return await super().on_list_prompts(context, call_next)
 
@@ -200,59 +206,46 @@ class MongoMCPMiddleware(Middleware):
         context: MiddlewareContext[mt.ListToolsRequest], 
         call_next: CallNext[mt.ListToolsRequest, List[mt.Tool]]
     ) -> List[mt.Tool]:
-        """Intercept the list_tools call and alter output to match JSON config from mongo mcp_config collection"""        
+        """Intercept list_tools and apply MongoDB annotation config: descriptions, parameter info, and tool filtering."""
         try:
-            # Call the next middleware or the actual handler
             result = await call_next(context)
-            
-            if result:
-                remove_tools = []
-                for tool in result:
-                    tool_description =  self.generate_docstring(tool.name)
-                    if tool_description:
-                        tool.description = tool_description
-                    else:
-                        print(f"No annotation found for tool '{tool.name}'")
-                        remove_tools.append(tool)
-                        continue
 
-                    
-                    anot = self.get_tool_annotation(tool.name)
-                    req = anot.get("required", [])
-                    
-                    if tool.parameters:
-                        keys = list(tool.parameters.keys())                         
-                        for param_name in keys:                            
-                            param = tool.parameters[param_name]                            
-                            if param_name == "required":                                
-                                if param_name in req:                                    
-                                    tool.parameters[param_name]["required"] = True                                
-                            elif param_name == "properties":
-                                new_props = {}
-                                for prop in param:
-                                    if prop == "token":
-                                        # token is for internal passing only, ignore it
-                                        continue
-                                    try:
-                                        new_props[prop] = param[prop]
-                                        param_info = anot["parameters"].get(prop, {})
-                                        new_props[prop]["description"] =  param_info["description"]
-                                        #new_props[prop]["type"] =  param_info["type"]
-                                    except KeyError as ke:
-                                        logger.error(f"No parameter info found for {prop} in tool {tool.name}: {ke}")
-                                tool.parameters["properties"] = new_props                                                
-            else:
-                print("   No tools found")
-                        
-            if len(remove_tools) > 0:
-                for rt in remove_tools:
-                    result.remove(rt)
+            if not result:
+                logger.info("on_list_tools: no tools returned from handler")
+                return result
+
+            self.load_annotations()
+            remove_tools = []
+            for tool in result:
+                anot = self.endpoint_tools.get(tool.name)
+                if not anot:
+                    logger.info(f"No annotation found for tool '{tool.name}', removing from list")
+                    remove_tools.append(tool)
+                    continue
+
+                description = anot.get("description", f"Tool: {tool.name}")
+                returns = anot.get("returns")
+                if returns:
+                    description += f"\n\nReturns:\n    {returns}"
+                tool.description = description
+
+                if tool.parameters and "properties" in tool.parameters:
+                    new_props = {}
+                    for prop_name, prop_val in tool.parameters["properties"].items():
+                        if prop_name == "token":
+                            continue
+                        new_props[prop_name] = prop_val
+                        param_info = anot.get("parameters", {}).get(prop_name, {})
+                        if param_info.get("description"):
+                            new_props[prop_name]["description"] = param_info["description"]
+                    tool.parameters["properties"] = new_props
+
+            for rt in remove_tools:
+                result.remove(rt)
 
             return result
-            
+
         except Exception as e:
-            print(f"ERROR in middleware: {e}")
-            print("Full stack trace:")
-            traceback.print_exc()  # Prints full stack trace
-            print("=" * 60 + "\n")
+            logger.error(f"ERROR in on_list_tools: {e}")
+            traceback.print_exc()
             raise

@@ -70,6 +70,17 @@ def stream_query():
         return jsonify({'error': str(e)}), 400
 
 
+@app.route('/config', methods=['GET'])
+def get_config():
+    try:
+        if processor.init_error:
+            raise ValueError(f"Processor initialization failed: {processor.init_error}")
+        return jsonify(processor.get_mcp_config()), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/history/reset', methods=['POST'])
 def reset_history():
     try:
