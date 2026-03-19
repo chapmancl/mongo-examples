@@ -30,7 +30,7 @@ class CachedQueryProcessor:
     4. Conversation history caching
     """
 
-    _CACHE_VERSION = "v2"  # Bump when tool discovery cache schema changes to auto-invalidate stale entries
+    _CACHE_VERSION = "v3"  # Bump when tool discovery cache schema changes to auto-invalidate stale entries
 
     def __init__(self, settings, message_handler: Optional[callable] = None):
         """Initializes the CachedQueryProcessor with caching configuration"""
@@ -195,32 +195,13 @@ class CachedQueryProcessor:
         bedrock_tools = []
         root_frmt = f"{self.settings.mongo_mcp_root}/{{}}/mcp"
 
-        for name in self.mcp_endpoints:
-            # Build fastmcp client config used by _call_mcp_tool for actual tool execution
-            self.mcp_endpoint_configs[name] = {
-                "url": root_frmt.format(name),
-                "transport": "http",
-                "headers": {"Authorization": f"Bearer {self.settings.AUTH_TOKEN}"}
-            }
-
-            # Fetch pre-formatted Bedrock toolSpec via the server annotation API
-            try:
-                resp = requests.get(f"{self.settings.mongo_mcp_root}/{name}/llm_tools", headers=self._headers)
-                resp.raise_for_status()
-                tools = resp.json().get("tools", [])
-                bedrock_tools.extend(tools)
-                self.message_handler(f"Fetched {len(tools)} tools from {name}", status="Tools Discovered")
-            except Exception as e:
-                self.message_handler(f"Error fetching tools for {name}: {e}", status="Error")
-
-            # Fetch collection info for the LLM system prompt
-            self.mongo_collection_info[name] = {}
-            try:
-                resp = requests.get(f"{self.settings.mongo_mcp_root}/{name}/collection_info", headers=self._headers)
-                resp.raise_for_status()
-                self.mongo_collection_info[name] = resp.json().get("collection_info", {})
-            except Exception as e:
-                self.message_handler(f"Error fetching collection info for {name}: {e}", status="Error")
+        results = await asyncio.gather(*[
+            self._fetch_endpoint_data(name, root_frmt) for name in self.mcp_endpoints
+        ])
+        for name, config, tools, collection_info in results:
+            self.mcp_endpoint_configs[name] = config
+            bedrock_tools.extend(tools)
+            self.mongo_collection_info[name] = collection_info
 
         if self.mcp_endpoint_configs:
             self.mcp_client = fastmcp.Client({"mcpServers": self.mcp_endpoint_configs})
@@ -236,6 +217,40 @@ class CachedQueryProcessor:
                 "collection_info": self.mongo_collection_info,
                 "tools": bedrock_tools,
             })
+
+    async def _fetch_endpoint_data(self, name: str, root_frmt: str) -> tuple:
+        """Fetch llm_tools and collection_info for a single endpoint. Runs concurrently via asyncio.gather."""
+        config = {
+            "url": root_frmt.format(name),
+            "transport": "http",
+            "headers": {"Authorization": f"Bearer {self.settings.AUTH_TOKEN}"}
+        }
+
+        tools = []
+        try:
+            resp = await asyncio.to_thread(
+                requests.get, f"{self.settings.mongo_mcp_root}/{name}/llm_tools", headers=self._headers
+            )
+            resp.raise_for_status()
+            tools = resp.json().get("tools", [])
+            for tool in tools:
+                if "toolSpec" in tool and "name" in tool["toolSpec"]:
+                    tool["toolSpec"]["name"] = f"{name}_{tool['toolSpec']['name']}"
+            self.message_handler(f"Fetched {len(tools)} tools from {name}", status="Tools Discovered")
+        except Exception as e:
+            self.message_handler(f"Error fetching tools for {name}: {e}", status="Error")
+
+        collection_info = {}
+        try:
+            resp = await asyncio.to_thread(
+                requests.get, f"{self.settings.mongo_mcp_root}/{name}/collection_info", headers=self._headers
+            )
+            resp.raise_for_status()
+            collection_info = resp.json().get("collection_info", {})
+        except Exception as e:
+            self.message_handler(f"Error fetching collection info for {name}: {e}", status="Error")
+
+        return name, config, tools, collection_info
 
     def _apply_cached_state(self, cached: dict) -> None:
         """Restore full instance state — endpoints, tools, and LLM client — from a cached discovery payload."""
