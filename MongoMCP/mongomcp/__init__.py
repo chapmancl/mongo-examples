@@ -14,24 +14,28 @@ Main Classes:
 - ServerBedrockClient: Server-specific Bedrock implementation
 - MongoTokenVerifier: JWT token authentication
 - MongoDBClient: MongoDB connection management
+
+The ``mongomcp.agent`` subpackage contains the Web UI agent classes
+(CachedQueryProcessor, ToolRouter, WebUiBedrockClient).  Install with
+``pip install mongomcp[agent]`` to pull in agent-only dependencies.
 """
 
 # Import all main classes for easy access
 from .mongodb_query_provider import MongoDBQueryServer
 from .mongo_mcp_middleware import MongoMCPMiddleware
-from .bedrock_client import ServerBedrockClient, BedrockClient
+from .bedrock_client import BedrockClient, ServerBedrockClient
 from .mongo_token_verifier import MongoTokenVerifier
 from .mongodb_client import MongoDBClient
 
 # Package version
-__version__ = "1.0.0"
+__version__ = "2.0.0"
 
 # Expose main classes at package level
 __all__ = [
    "MongoDBQueryServer",
    "MongoMCPMiddleware",
-    "ServerBedrockClient",
+   "BedrockClient",
+   "ServerBedrockClient",
    "MongoTokenVerifier",
-    "MongoDBClient",
-    "BedrockClient"
+   "MongoDBClient",
 ]

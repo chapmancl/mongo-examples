@@ -1,6 +1,6 @@
 import json
 from typing import Any, Dict, List, Optional
-from mongomcp.bedrock_client import BedrockClient
+from ..bedrock_client import BedrockClient
 
 JSON_DATA_START = '[JSON_DATA_START]'
 JSON_DATA_END = '[JSON_DATA_END]'
@@ -60,6 +60,20 @@ class WebUiBedrockClient(BedrockClient):
             request=request,
         )
 
+    async def invoke_bedrock_with_tools_text(
+        self,
+        prompt: Optional[str] = None,
+        context: Optional[str] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """Invoke Bedrock and return a normalized {response_text, jsondata, history} dict."""
+        raw = await self.invoke_bedrock_with_tools(
+            prompt=prompt,
+            context=context,
+            messages=messages,
+        )
+        return self.normalize_bedrock_response(raw, fallback_history=messages or [])
+
     async def _call_mcp_tool(
         self,
         toolname: str,
@@ -117,22 +131,3 @@ class WebUiBedrockClient(BedrockClient):
             "jsondata": None,
             "history": history,
         }
-
-    async def invoke_bedrock_with_tools_text(
-        self,
-        prompt: Optional[str] = None,
-        context: Optional[str] = None,
-        messages: Optional[List[Dict[str, Any]]] = None,
-    ) -> Dict[str, Any]:
-        """Preferred public entry point for callers (e.g. CachedQueryProcessor).
-        Calls self.invoke_bedrock_with_tools() [WebUiBedrockClient override → BedrockClient base]
-        then passes the raw result through normalize_bedrock_response() to extract
-        cleaned text and any structured JSON data block.
-        Returns: {response_text: str, jsondata: dict|None, history: list}
-        """
-        response_obj = await self.invoke_bedrock_with_tools(  # WebUiBedrockClient override
-            prompt=prompt,
-            context=context,
-            messages=messages,
-        )
-        return self.normalize_bedrock_response(response_obj, fallback_history=messages)

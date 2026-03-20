@@ -3,7 +3,7 @@ from typing import Any, Dict, Optional
 
 from botocore.exceptions import ClientError
 
-from mongoagent.cached_query_processor import CachedQueryProcessor
+from mongomcp.agent.cached_query_processor import CachedQueryProcessor
 #from local_settings import settings
 from aws_settings import settings
 

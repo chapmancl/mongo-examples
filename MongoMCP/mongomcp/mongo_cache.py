@@ -92,7 +92,7 @@ class MongoSessionCache:
         ttl = int(entry.get("ttl", self._default_ttl))
 
         if time.time() - timestamp >= ttl:
-            #await self.delete(key)
+            await self.delete(key)
             return None
 
         return entry.get("value")
@@ -187,63 +187,30 @@ class MongoSessionCache:
 
         return removed
 
+    @staticmethod
+    def create_cache_key(tool_name: str, tool_input: Dict[str, Any]) -> str:
+        """Create a deterministic cache key from tool name and input."""
+        sorted_input = json.dumps(tool_input, sort_keys=True, default=str)
+        input_hash = hashlib.md5(sorted_input.encode("utf-8")).hexdigest()
+        return f"{tool_name}:{input_hash}"
+
+    async def get_or_compute(self, cache_key: str, compute: Callable[[], Awaitable[Any]],
+                             on_cache_hit: Optional[Callable[[], None]] = None,
+                             on_cache_miss: Optional[Callable[[], None]] = None) -> Any:
+        """Resolve a cached value or compute and store it."""
+        cached_result = await self.get(cache_key)
+        if cached_result is not None:
+            if on_cache_hit:
+                on_cache_hit()
+            return cached_result
+        if on_cache_miss:
+            on_cache_miss()
+        result = await compute()
+        await self.set(cache_key, result)
+        return result
+
 
 def create_cache_key(tool_name: str, tool_input: Dict[str, Any]) -> str:
-    """Create a deterministic cache key from tool name and input."""
-    sorted_input = json.dumps(tool_input, sort_keys=True, default=str)
-    input_hash = hashlib.md5(sorted_input.encode("utf-8")).hexdigest()
-    return f"{tool_name}:{input_hash}"
+    """Module-level alias for MongoSessionCache.create_cache_key — kept for backward compatibility."""
+    return MongoSessionCache.create_cache_key(tool_name, tool_input)
 
-
-def _run_coro(coro_factory: Callable[[], Awaitable[Any]]) -> Any:
-    """Run an async cache op from sync context when no loop is active."""
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro_factory())
-    raise RuntimeError(
-        "Synchronous get_or_compute cannot run inside an active event loop. "
-        "Use get_or_compute_async instead."
-    )
-
-
-def get_or_compute(
-    cache: MongoSessionCache,
-    cache_key: str,
-    compute: Callable[[], Any],
-    on_cache_hit: Optional[Callable[[], None]] = None,
-    on_cache_miss: Optional[Callable[[], None]] = None,
-) -> Any:
-    """Resolve a cached value or compute and store it."""
-    cached_result = _run_coro(lambda: cache.get(cache_key))
-    if cached_result is not None:
-        if on_cache_hit:
-            on_cache_hit()
-        return cached_result
-
-    if on_cache_miss:
-        on_cache_miss()
-    result = compute()
-    _run_coro(lambda: cache.set(cache_key, result))
-    return result
-
-
-async def get_or_compute_async(
-    cache: MongoSessionCache,
-    cache_key: str,
-    compute: Callable[[], Awaitable[Any]],
-    on_cache_hit: Optional[Callable[[], None]] = None,
-    on_cache_miss: Optional[Callable[[], None]] = None,
-) -> Any:
-    """Async variant of get_or_compute."""
-    cached_result = await cache.get(cache_key)
-    if cached_result is not None:
-        if on_cache_hit:
-            on_cache_hit()
-        return cached_result
-
-    if on_cache_miss:
-        on_cache_miss()
-    result = await compute()
-    await cache.set(cache_key, result)
-    return result

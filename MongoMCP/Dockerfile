@@ -9,11 +9,11 @@ COPY requirements.txt .
 
 # Copy application files
 COPY mongomcp/ mongomcp/
-COPY local_settings.py .
+COPY AWS_settings.py .
 COPY mongo_mcp.py .
 
 RUN pip install --no-cache-dir ./mongomcp
-RUN pip install -r requirements.txt 
+RUN pip install -r requirements.txt
 
 # Make the script executable
 #RUN chmod +x mongo_mcp.py
@@ -26,4 +26,3 @@ EXPOSE 8000
 
 # Run the MCP server
 CMD ["fastapi", "run", "mongo_mcp.py"]
-#CMD ["uvicorn", "mongo_mcp:app", "--host", "0.0.0.0", "--port", "8000"]

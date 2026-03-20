@@ -3,6 +3,7 @@ from flask import Flask, send_from_directory, request, jsonify, abort, Response
 from flask_cors import CORS
 import requests
 from mcp_processor import APIQueryProcessor, QueryResponse, QueryRequest
+from mongomcp import __version__ as MCP_VERSION
 import mimetypes
 import traceback
 from typing import Optional, List, Any
@@ -15,6 +16,16 @@ app = Flask(__name__, static_folder=os.path.join(os.path.dirname(__file__), 'fro
 CORS(app)
 
 processor = APIQueryProcessor()
+
+@app.route('/health', methods=['GET'])
+def health():
+    """Health check endpoint."""
+    return jsonify({
+        "status": "ok",
+        "version": MCP_VERSION,
+        "processor_ready": processor.init_error is None,
+    }), 200
+
 
 @app.route('/query', methods=['POST'])
 def api_query():
@@ -33,18 +44,18 @@ def api_query():
         req = QueryRequest(input=q, history=payload.get("history", []))  # Validate input with Pydantic model
         # Mirror CLI commands
         if q.startswith("clear history"):
-            processor.clear_history()
+            resp = processor.clear_history().json()    
+            code = 205
+        elif q.startswith("clear cache"):
             resp = processor.clear_all_caches().json()
             code = 205
-        elif q.startswith("clear"):            
+        elif q.startswith("clear all"):                        
+            processor.get_cache_stats()
+            processor.clear_history()
             resp = processor.clear_all_caches().json()
             code = 205
         elif q.startswith("cache stats"):
             resp = processor.get_cache_stats().json() 
-            code = 200
-
-        elif q.startswith("cache clear"):
-            resp = processor.clear_all_caches().json()
             code = 200
         else:
             # Normal question => forward to LLM/Bedrock with MCP tools
@@ -70,17 +81,6 @@ def stream_query():
         return jsonify({'error': str(e)}), 400
 
 
-@app.route('/config', methods=['GET'])
-def get_config():
-    try:
-        if processor.init_error:
-            raise ValueError(f"Processor initialization failed: {processor.init_error}")
-        return jsonify(processor.get_mcp_config()), 200
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
-
-
 @app.route('/history/reset', methods=['POST'])
 def reset_history():
     try:
@@ -88,7 +88,7 @@ def reset_history():
             raise ValueError(f"Processor initialization failed: {processor.init_error}")
 
         resp = processor.clear_history().json()
-        return jsonify(resp), 200
+        return jsonify(resp), 205
     except Exception as e:
         traceback.print_exc()
         return jsonify(QueryResponse(status="Error", error=str(e)).json()), 500
@@ -141,7 +141,14 @@ def generate(payload):
                     result, exception = item
                 else:
                     yield item
-        elif q.startswith("clear"):
+        elif q.startswith("clear cache"):
+            for item in execute_in_thread(processor.clear_all_caches):
+                if isinstance(item, tuple):
+                    result, exception = item
+                else:
+                    yield item
+        elif q.startswith("clear all"):
+            processor.clear_history()  # Clear history first to avoid interleaving messages from cache stats            
             for item in execute_in_thread(processor.clear_all_caches):
                 if isinstance(item, tuple):
                     result, exception = item
@@ -149,12 +156,6 @@ def generate(payload):
                     yield item
         elif q.startswith("cache stats"):
             for item in execute_in_thread(processor.get_cache_stats):
-                if isinstance(item, tuple):
-                    result, exception = item
-                else:
-                    yield item
-        elif q.startswith("cache clear"):
-            for item in execute_in_thread(processor.clear_all_caches):
                 if isinstance(item, tuple):
                     result, exception = item
                 else:

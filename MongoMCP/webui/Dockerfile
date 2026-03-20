@@ -18,11 +18,10 @@ ENV PYTHONUNBUFFERED=1
 COPY requirements.txt requirements.txt
 COPY app.py app.py
 COPY mcp_processor.py mcp_processor.py
-COPY local_settings.py local_settings.py
+COPY aws_settings.py aws_settings.py
 COPY --from=rootfolder ./mongomcp/ mongomcp/
-COPY --from=rootfolder ./mongoagent/ mongoagent/
 
-RUN pip install --no-cache-dir ./mongomcp ./mongoagent
+RUN pip install --no-cache-dir "./mongomcp[agent]"
 RUN pip install -r requirements.txt
 
 COPY --from=frontend-build /build/frontend/dist frontend/dist

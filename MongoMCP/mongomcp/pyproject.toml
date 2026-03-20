@@ -19,8 +19,17 @@ dependencies = [
     "requests>=2.31",
 ]
 
+[project.optional-dependencies]
+agent = [
+    "flask",
+    "flask-cors",
+    "pydantic",
+    "gunicorn",
+]
+
 [tool.setuptools]
-packages = ["mongomcp"]
+packages = ["mongomcp", "mongomcp.agent"]
 
 [tool.setuptools.package-dir]
 mongomcp = "."
+"mongomcp.agent" = "agent"

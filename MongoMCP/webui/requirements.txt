@@ -1,9 +1,4 @@
 flask
 flask-cors
 requests
-boto3
-fastmcp
-motor
-pymongo
-pydantic
 gunicorn

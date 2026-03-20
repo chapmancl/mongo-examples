@@ -10,7 +10,8 @@ from fastmcp.server.dependencies import AccessToken, get_access_token
 from starlette.responses import JSONResponse
 from AWS_settings import settings 
 #from local_settings import settings # change this to use AWS_settings
-from mongomcp import MongoDBQueryServer, MongoMCPMiddleware, ServerBedrockClient, MongoTokenVerifier
+from mongomcp import MongoDBQueryServer, MongoMCPMiddleware, ServerBedrockClient, MongoTokenVerifier, __version__ as MCP_VERSION
+from mongomcp.agent.tool_router import ToolRouter
 import traceback
 import sys
 
@@ -367,68 +368,27 @@ async def get_optional_token(
 ):
     return verify_optional_token(credentials)
 
-# Tool handler function for mapping tool names to functions
+# Dispatch table: tool name → .fn reference. Add new tools here when registered with @mcp.tool().
+_TOOL_DISPATCH = {
+    "upsert_document":    upsert_document.fn,
+    "vector_search":      vector_search.fn,
+    "text_search":        text_search.fn,
+    "geospatial_search":  geospatial_search.fn,
+    "get_unique_values":  get_unique_values.fn,
+    "get_collection_info": get_collection_info.fn,
+    "aggregate_query":    aggregate_query.fn,
+}
+
 async def tool_handler(token: AccessToken, toolname: str, tool_input: dict) -> dict:
-    """
-    Wrapper function that maps tool names to the appropriate MCP tool functions
-    LLM tool use requests will flow through here
-    
-    Args:
-        toolname: Name of the tool to execute
-        tool_input: Input parameters for the tool
-        
-    Returns:
-        dict: Result from the tool execution
-    """
-    
+    """Map toolname to the appropriate MCP tool function and execute it."""
+    fn = _TOOL_DISPATCH.get(toolname)
+    if fn is None:
+        return {"error": f"Unknown tool: {toolname}"}
     try:
+        kwargs = dict(tool_input)
         if toolname == "upsert_document":
-            return await upsert_document.fn(
-                collection=tool_input.get("collection"),
-                filter=tool_input.get("filter"),
-                update=tool_input.get("update"),
-                token=token
-            )
-        elif toolname == "vector_search":
-            return await vector_search.fn(
-                collection=tool_input.get("collection"),
-                query_text=tool_input.get("query_text"),
-                limit=tool_input.get("limit", 10),
-                num_candidates=tool_input.get("num_candidates", 100),
-                filters=tool_input.get("filters")
-            )
-        elif toolname == "geospatial_search":
-            return await geospatial_search.fn(
-                collection=tool_input.get("collection"),
-                longitude=tool_input.get("longitude"),
-                latitude=tool_input.get("latitude"),
-                limit=tool_input.get("limit", 10),
-                max_distance_meters=tool_input.get("max_distance_meters", None),
-                min_distance_meters=tool_input.get("min_distance_meters", None),
-                filters=tool_input.get("filters", None),
-                geo_field=tool_input.get("geo_field"),
-            )
-        elif toolname == "text_search":
-            return await text_search.fn(
-                collection=tool_input.get("collection"),
-                query_text=tool_input.get("query_text"),
-                limit=tool_input.get("limit", 10)
-            )
-        elif toolname == "get_unique_values":
-            return await get_unique_values.fn(
-                collection=tool_input.get("collection"),
-                field=tool_input.get("field")
-            )
-        elif toolname == "get_collection_info":
-            return await get_collection_info.fn()
-        elif toolname == "aggregate_query":
-            return await aggregate_query.fn(
-                collection=tool_input.get("collection"),
-                pipeline=tool_input.get("pipeline"),
-                limit=tool_input.get("limit")
-            )
-        else:
-            return {"error": f"Unknown tool: {toolname}"}
+            kwargs["token"] = token
+        return await fn(**kwargs)
     except Exception as e:
         logger.error(f"Tool handler error for {toolname}: {e}")
         logger.debug("".join(traceback.format_exception(None, e, e.__traceback__)))
@@ -442,12 +402,13 @@ async def root_endpoint(token: Annotated[str | None, Depends(get_optional_token)
         return {
             "message": "MongoDB Vector Server MCP",
             "status": "running",
+            "version": MCP_VERSION,
             "available_tools": mongo_middleware.active_endpoints,
             "available_endpoints": [
-                f"GET  /{settings.TOOL_NAME}/health",
-                f"GET  /{settings.TOOL_NAME}/mcp",
+                f"GET  /{settings.TOOL_NAME}/health",                
                 f"GET  /{settings.TOOL_NAME}/collection_info",
                 f"GET  /{settings.TOOL_NAME}/llm_tools",
+                f"POST /{settings.TOOL_NAME}/route",
                 f"GET  /{settings.TOOL_NAME}/reset",
                 f"POST /{settings.TOOL_NAME}/prompt/{{prompt_name}}",
                 "GET  /tools_config",
@@ -456,7 +417,7 @@ async def root_endpoint(token: Annotated[str | None, Depends(get_optional_token)
         }
     else:
         return {
-            "message": "MongoDB Vector Server MCP",
+            "message": "OK",
             "status": "running"
         }
 
@@ -468,6 +429,7 @@ async def http_health_check(token: Annotated[str | None, Depends(get_optional_to
     # always return something or else the load balancer will mark it unhealthy and continue to reload the container        
     failed, server_info = await mongo_server.get_mongo_info(False)
     output = server_info.copy()
+    output["version"] = MCP_VERSION
     if not token: 
         # no token, remove sensitive info
         output.pop("mongodb")
@@ -497,6 +459,39 @@ async def http_get_llm_tools(token: Annotated[str, Depends(get_token)]) -> Dict[
     """Returns preformatted Bedrock toolSpec JSON for all active tools with MongoDB annotations applied."""
     tools = mongo_middleware.build_tools_from_annotations()
     return {"tools": tools, "count": len(tools)}
+
+
+@app.post(f"/{settings.TOOL_NAME}/route")
+async def route_tools(body: Dict[str, Any], token: Annotated[str, Depends(get_token)]) -> Dict[str, Any]:
+    """Select a subset of tools relevant to a question or explicit tool list.
+
+    Body options (mutually exclusive):
+      {"question": "..."}         — LLM routing: asks the model which tools are needed
+      {"tools": ["ep.tool", ...]} — Static routing: deterministic filter by name
+
+    The routing prompt is read from mongo config at prompts.tool_router if it exists.
+    """
+    all_tools = mongo_middleware.build_tools_from_annotations()
+    question = body.get("question")
+    explicit_tools = body.get("tools")
+
+    if explicit_tools and isinstance(explicit_tools, list):
+        # Static routing — no LLM call
+        router = ToolRouter(tool_catalog=all_tools)
+        filtered = router.select_tools(explicit_tools)
+        return {"tools": filtered, "count": len(filtered), "routing": "static"}
+
+    if question:
+        # LLM routing
+        routing_prompt = (
+            mongo_server.tool_config.get("prompts", {}).get("tool_router")
+            if hasattr(mongo_server, "tool_config") else None
+        )
+        router = ToolRouter(tool_catalog=all_tools, llm_client=llm_client)
+        filtered = await router.route_for_question(question, routing_prompt)
+        return {"tools": filtered, "count": len(filtered), "routing": "llm"}
+
+    return JSONResponse({"error": "Request body must contain 'question' (string) or 'tools' (list)"}, 400)
 
 
 @app.get(f"/{settings.TOOL_NAME}/reset")

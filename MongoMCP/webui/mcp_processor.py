@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from typing import Optional, List, Any
 #from local_settings import settings # change this to use AWS settings 
 from aws_settings import settings
-from mongoagent.cached_query_processor import CachedQueryProcessor
+from mongomcp.agent.cached_query_processor import CachedQueryProcessor
 import queue
 import threading
 
