@@ -48,7 +48,7 @@ make run-webui
 |---|---|---|
 | `AWS_REGION` | `us-east-2` | AWS region for Bedrock and Secrets Manager |
 | `MONGO_CREDS` | — | AWS Secrets Manager secret name for MongoDB credentials |
-| `MCP_TOOL_NAME` | `shipwreckSearch` | Which tool config to load from MongoDB |
+| `MCP_TOOL_NAME` | `airbnbSearch` | Which tool config to load from MongoDB |
 | `IS_LOCAL` | `true` | `true` = skip Secrets Manager, use hardcoded local creds |
 
 ### Web UI
@@ -61,7 +61,7 @@ make run-webui
 
 The `MONGO_MCP_ROOT` is auto-selected based on `IS_LOCAL`:
 - `IS_LOCAL=true` → `http://localhost:8000`
-- `IS_LOCAL=false` → `https://mcp.mongoarena.com`
+- `IS_LOCAL=false` → `https://mcp.myendpoint.com`
 
 ---
 
@@ -124,7 +124,7 @@ Any variable can be overridden on the command line:
 ```bash
 make run-mcp MCP_TOOL_NAME=AirbnbSearch
 make run-webui IS_LOCAL=false              # uses prod MCP URL
-make run-containers MONGO_CREDS=prod/mongo MCP_TOOL_NAME=claimsSearch
+make run-containers MONGO_CREDS=prod/mongo MCP_TOOL_NAME=AirbnbSearch
 make publish MCP_VERSION=21 WEBUI_VERSION=6
 ```
 
