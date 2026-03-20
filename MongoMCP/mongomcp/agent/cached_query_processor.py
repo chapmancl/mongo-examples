@@ -313,6 +313,21 @@ class CachedQueryProcessor:
             traceback.print_exc()
             raise
  
+    def _trim_history(self, history: list) -> list:
+        """Keep only the most recent LLM_MAX_HISTORY messages.
+        Always trims to a user-role message at the start so Bedrock
+        doesn't reject the conversation.
+        """
+        max_msgs = getattr(self.settings, 'LLM_MAX_HISTORY', 20)
+        if len(history) <= max_msgs:
+            return history
+        trimmed = history[-max_msgs:]
+        # Advance to first user message to satisfy Converse API ordering rules
+        for i, msg in enumerate(trimmed):
+            if msg.get("role") == "user":
+                return trimmed[i:]
+        return trimmed
+
     def query_with_mcp_tools(self, question: str, history: Optional[list] = None) -> tuple:
         """
         Query LLM with MCP tool support using Bedrock's Converse API with caching.
@@ -344,6 +359,7 @@ class CachedQueryProcessor:
         if self.history is None:
             self.history = []
 
+        self.history = self._trim_history(self.history)
         self.generate_toolconfig()
 
         messages = self.history

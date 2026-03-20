@@ -37,6 +37,7 @@ class APIQueryProcessor:
     def __init__(self):
         self._init_error: Optional[Exception] = None
         self._message_queue: queue.Queue = queue.Queue()
+        self._history_cleared: bool = False
         self._impl: CachedQueryProcessor = CachedQueryProcessor(settings, self._handle_message)
 
     def _ensure_impl(self) -> None:
@@ -93,6 +94,7 @@ class APIQueryProcessor:
     def clear_history(self) -> QueryResponse:
         self._ensure_impl()
         self._impl.history = None
+        self._history_cleared = True
         return QueryResponse(status="Clear History", message="History cleared", history=[])
 
     def get_history(self) -> QueryResponse:
@@ -113,6 +115,9 @@ class APIQueryProcessor:
     def query_with_mcp_tools(self, request: QueryRequest) -> QueryResponse:
         """Forward the question to the underlying processor and return (answer, history)."""
         self._ensure_impl()
-        answer, jsondata, history = self._impl.query_with_mcp_tools(request.input, request.history)
+        # If history was explicitly cleared, do not let the client re-send stale history.
+        history = None if self._history_cleared else request.history
+        self._history_cleared = False
+        answer, jsondata, history = self._impl.query_with_mcp_tools(request.input, history)
         content = {"text": answer, "jsondata": jsondata}
         return QueryResponse(status="Query Completed", message="Completed", content=content, history=history)

@@ -8,6 +8,7 @@ class LocalSettings:
         self.mcp_config_db = "mcp_config"
         self.mcp_config_col = "mcp_tools"
         self.LLM_MODEL_ID = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+        self.LLM_MAX_HISTORY = int(os.getenv('LLM_MAX_HISTORY', '20'))  # max messages kept in history before trimming
         self.LLM_MAX_ITERATIONS = int(os.getenv('LLM_MAX_ITERATIONS', '15'))
         self.ENABLE_CACHE_POINTS = os.getenv('ENABLE_CACHE_POINTS', 'true').lower() in ['1', 'true', 'yes', 'on']
         self.ENABLE_BEDROCK_CACHING = True
