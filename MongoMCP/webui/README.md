@@ -38,9 +38,9 @@ bash build_and_run.sh
 
 ## Access
 
-- UI: `http://localhost:8000`
-- API: `http://localhost:8000/query`
-- Streaming API: `http://localhost:8000/query/stream`
+- UI: `http://localhost:8001`
+- API: `http://localhost:8001/query`
+- Streaming API: `http://localhost:8001/query/stream`
 
 ## Notes
 
@@ -54,7 +54,7 @@ Build and run from repository root:
 
 ```bash
 docker build -t mcp-webui ./webui
-docker run --rm -p 8000:8000 mcp-webui
+docker run --rm -p 8001:8001 mcp-webui
 ```
 
 ## Pattern Cache (AI Tool Routing)
