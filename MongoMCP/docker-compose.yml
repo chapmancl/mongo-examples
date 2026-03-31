@@ -1,0 +1,13 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:      
+      - IS_LOCAL=${IS_LOCAL}
+      - MONGO_CREDS=${MONGO_CREDS}
+      - MCP_TOOL_NAME=${MCP_TOOL_NAME}
+    volumes:
+      - ~/.aws:/root/.aws

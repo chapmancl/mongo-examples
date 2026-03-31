@@ -13,7 +13,23 @@ export default function JsonDataRenderer({ jsonData }) {
     default:
       return (
         <div style={{ padding: 12, background: '#f9f9f9', border: '1px solid #ddd', borderRadius: 4 }}>
-          <strong>Unsupported data type:</strong> {jsonData.jsonDataType}
+          <div style={{ marginBottom: 8 }}>
+            <strong>Unsupported data type:</strong> {jsonData.jsonDataType}
+          </div>
+          <pre
+            style={{
+              margin: 0,
+              padding: 12,
+              background: '#111827',
+              color: '#e5e7eb',
+              borderRadius: 6,
+              overflowX: 'auto',
+              fontSize: 12,
+              lineHeight: 1.4,
+            }}
+          >
+            <code>{JSON.stringify(jsonData, null, 2)}</code>
+          </pre>
         </div>
       );
   }

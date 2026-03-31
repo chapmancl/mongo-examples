@@ -88,7 +88,34 @@ def reset_history():
             raise ValueError(f"Processor initialization failed: {processor.init_error}")
 
         resp = processor.clear_history().json()
-        return jsonify(resp), 205
+        return jsonify(resp), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify(QueryResponse(status="Error", error=str(e)).json()), 500
+
+
+@app.route('/history', methods=['GET'])
+def get_history():
+    """Return trimmed conversation history for the UI debug panel."""
+    try:
+        if processor.init_error:
+            raise ValueError(f"Processor initialization failed: {processor.init_error}")
+        resp = processor.get_history()
+        return jsonify(resp.json()), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify(QueryResponse(status="Error", error=str(e)).json()), 500
+
+
+@app.route('/pattern/save', methods=['POST'])
+def save_pattern():
+    """Save the routing pattern from the last query into the pattern cache."""
+    try:
+        if processor.init_error:
+            raise ValueError(f"Processor initialization failed: {processor.init_error}")
+
+        resp = processor.save_pattern().json()
+        return jsonify(resp), 200
     except Exception as e:
         traceback.print_exc()
         return jsonify(QueryResponse(status="Error", error=str(e)).json()), 500

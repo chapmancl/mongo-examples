@@ -1,0 +1,14 @@
+services:
+  webui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      additional_contexts:
+        rootfolder: ..
+    ports:
+      - "8001:8001"
+    environment:
+      - MONGO_MCP_ROOT=${MONGO_MCP_ROOT}
+      - MONGO_CREDS=${MONGO_CREDS}
+    volumes:
+      - ~/.aws:/root/.aws

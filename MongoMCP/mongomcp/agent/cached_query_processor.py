@@ -8,6 +8,9 @@ import mcp.types as mt
 from .webui_bedrock_client import WebUiBedrockClient
 from .tool_router import ToolRouter
 from ..mongo_cache import MongoSessionCache
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 import fastmcp
 
@@ -58,8 +61,9 @@ class CachedQueryProcessor:
         )
         
         # Cache control flags
-        self.enable_mcp_tool_caching = getattr(settings, "ENABLE_MCP_TOOL_CACHING", True)
+        self.enable_mcp_tool_caching = getattr(settings, "ENABLE_MCP_TOOL_CACHING", False)
         self.enable_response_caching = getattr(settings, "ENABLE_RESPONSE_CACHING", True)
+        self.enable_ai_tool_routing = getattr(settings, "AI_TOOL_ROUTING", False)
 
         self.generate_toolconfig()
     
@@ -243,6 +247,7 @@ class CachedQueryProcessor:
             tool_catalog=bedrock_tools,
             llm_client=self.llm_client,
             message_handler=self.message_handler,
+            settings=self.settings,
         )
 
 
@@ -290,18 +295,30 @@ class CachedQueryProcessor:
                 endpoint_client = fastmcp.Client({"mcpServers": {endpoint_name: endpoint_config}})
                 self.endpoint_clients[endpoint_name] = endpoint_client
 
-            async with endpoint_client:
-                result = await endpoint_client.session.send_request(
-                    mt.ClientRequest(
-                        mt.CallToolRequest(
-                            params=mt.CallToolRequestParams(
-                                name=endpoint_tool_name,
-                                arguments=tool_input,
+            # Wrap the entire session open → request → session close in a timeout.
+            # The session close can hang indefinitely (fastmcp bug), so we need to
+            # time out the whole block, not just the request.
+            async def _run_in_session():
+                async with endpoint_client:
+                    return await endpoint_client.session.send_request(
+                        mt.ClientRequest(
+                            mt.CallToolRequest(
+                                params=mt.CallToolRequestParams(
+                                    name=endpoint_tool_name,
+                                    arguments=tool_input,
+                                )
                             )
-                        )
-                    ),
-                    mt.CallToolResult,
+                        ),
+                        mt.CallToolResult,
+                    )
+
+            try:
+                result = await asyncio.wait_for(_run_in_session(), timeout=90)
+            except asyncio.TimeoutError:
+                await self.async_message_handler(
+                    f"MCP tool {toolname} timed out (session open/close included)", status="Error"
                 )
+                raise RuntimeError(f"MCP tool call {toolname} timed out after 90s")
 
             if result.content and hasattr(result.content[0], "text"):
                 return result.content[0].text
@@ -367,15 +384,34 @@ class CachedQueryProcessor:
         self.llm_client.message_handler = self.message_handler
 
         async def _invoke(msgs):
+            if self.enable_ai_tool_routing and self.tool_router is not None:
+                try:
+                    tools_for_question, hint_text = await self.tool_router.route_for_question(question)
+                    if tools_for_question:
+                        logger.info(f"Tools selected: {[t['toolSpec']['name'] for t in tools_for_question]}")
+                        self.llm_client.configure_tools(tools_for_question, self._execute_mcp_tool_cached_async)
+                    if hint_text:
+                        # Append the playbook / output-format hint to the user message
+                        user_block = msgs[-1]["content"]
+                        user_block.append({"text": f"\n\n{hint_text}"})
+                        logger.info("Injected playbook hint into user message")
+                except Exception as e:
+                    traceback.print_exc()
+                    logger.warning(f"Tool routing failed, falling back to full tool set: {e}")
+
+            self.llm_client.system = self._system_prompt
+
             # Reset Motor connections so they bind to this event loop.
             self._tool_response_cache.reset_connection()
-            if self.mcp_client is not None:
-                async with self.mcp_client:
-                    return await self.llm_client.invoke_bedrock_with_tools_text(messages=msgs)
+            # Tool calls use per-endpoint clients (self.endpoint_clients) that
+            # open/close their own sessions on each call, so we do NOT need the
+            # top-level self.mcp_client context manager here.  Opening it would
+            # create sessions to every endpoint and the close can hang.
             return await self.llm_client.invoke_bedrock_with_tools_text(messages=msgs)
 
         try:
             invoke_result = asyncio.run(_invoke(messages))
+            self.message_handler("Response ready, sending to UI...", status="Finalizing")
         except ClientError as error:
             error_code = error.response['Error']['Code']
             print(f"Bedrock error: {error_code} - {error.response['Error']['Message']}")
@@ -391,7 +427,40 @@ class CachedQueryProcessor:
         self.history = invoke_result.get("history", messages)
         answer = invoke_result.get("response_text", "No response generated")
         jsondata = invoke_result.get("jsondata", None)
+
+        # Stash last query state so save_pattern() can be triggered manually.
+        self._last_question = question
+        self._last_answer = answer
+        self._last_jsondata = jsondata
+
         return answer, jsondata, self.history
+
+    def save_pattern(self) -> bool:
+        """Persist the routing pattern from the last query into the pattern cache.
+
+        Should be called explicitly (e.g. via a UI button) after the user
+        confirms the output is correct.  Returns True if a pattern was saved.
+        """
+        if not self.enable_ai_tool_routing or self.tool_router is None:
+            return False
+        if not getattr(self, '_last_question', None) or not getattr(self, '_last_answer', None):
+            return False
+        if self._last_answer.startswith("Error"):
+            return False
+        try:
+            asyncio.run(
+                self.tool_router.record_pattern(
+                    list(self.history),
+                    self._last_answer,
+                    jsondata=self._last_jsondata,
+                    question=self._last_question,
+                )
+            )
+            return True
+        except Exception as exc:
+            logger.warning(f"Pattern save failed: {exc}")
+            return False
+            return False
 
     def get_cache_stats(self) -> dict:
         """Get cache statistics for monitoring"""

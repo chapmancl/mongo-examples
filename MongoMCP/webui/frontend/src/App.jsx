@@ -15,6 +15,62 @@ export default function App() {
   const [streamedOutput, setStreamedOutput] = useState('')
   const [status, setStatus] = useState(null)
   const [liveMessage, setLiveMessage] = useState('')
+  const [patternSaved, setPatternSaved] = useState(false)
+  const [patternSaving, setPatternSaving] = useState(false)
+
+  function parseMaybeJson(value) {
+    if (typeof value !== 'string') return value
+    const trimmed = value.trim()
+    if (!trimmed) return null
+    try {
+      return JSON.parse(trimmed)
+    } catch {
+      return value
+    }
+  }
+
+  function consumeStreamPayload(rawPayload) {
+    let obj = parseMaybeJson(rawPayload)
+    obj = parseMaybeJson(obj)
+    if (!obj || typeof obj !== 'object') return
+
+    if (obj.history !== undefined && obj.history !== null) {
+      setHistory(obj.history)
+    }
+
+    if (obj.status !== undefined) setStatus(obj.status)
+    if (obj.message !== undefined) {
+      const msg = String(obj.message)
+      setLiveMessage(msg)
+      setStreamedOutput((prev) => (prev ? prev + '\n' : '') + msg)
+    }
+
+    const content = parseMaybeJson(obj.content)
+    if (content && typeof content === 'object') {
+      setAnswer(content.text || null)
+      const jd = content.jsondata ?? content.jsonData
+      if (jd && (jd.jsonDataType || jd.jsondataType)) {
+        setMapData(jd)
+      }
+    }
+  }
+
+  async function savePattern() {
+    try {
+      setPatternSaving(true)
+      const res = await fetch(`${API_URL}/pattern/save`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to save pattern')
+      setPatternSaved(true)
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setPatternSaving(false)
+    }
+  }
 
   async function submitQuestion() {
     setLoading(true)
@@ -24,6 +80,7 @@ export default function App() {
     setMapData(null)
     setStatus(null)
     setLiveMessage('')
+    setPatternSaved(false)
     try {
       // Try streaming endpoint first
       const res = await fetch(`${API_URL}/query/stream`, {
@@ -42,24 +99,6 @@ export default function App() {
         const decoder = new TextDecoder()
         let buf = ''
 
-        function extractJsonObjects(str) {
-          const objects = []
-          let depth = 0, start = -1
-          for (let i = 0; i < str.length; i++) {
-            if (str[i] === '{') { if (depth === 0) start = i; depth++ }
-            else if (str[i] === '}') {
-              depth--
-              if (depth === 0 && start !== -1) {
-                objects.push(str.slice(start, i + 1))
-                start = -1
-              }
-            }
-          }
-          // return extracted objects and the remaining unparsed tail
-          const tail = depth > 0 && start !== -1 ? str.slice(start) : ''
-          return { objects, tail }
-        }
-
         while (true) {
           const { done, value } = await reader.read()
           if (done) break
@@ -67,64 +106,22 @@ export default function App() {
           const chunk = decoder.decode(value, { stream: true })
           buf += chunk
 
-          const { objects, tail } = extractJsonObjects(buf)
-          buf = tail
+          const lines = buf.split('\n')
+          buf = lines.pop() || ''
 
-          for (const raw of objects) {
-            try {
-              const obj = JSON.parse(raw)
-
-              // If response carries history, replace the history viewer only when it's not null/empty
-              if (obj.history !== undefined && obj.history !== null) {
-                setHistory(obj.history)
-              }
-
-              if (obj.status !== undefined) setStatus(obj.status)
-              if (obj.message !== undefined) setLiveMessage(String(obj.message))
-
-              // Show answer in separate section (not in live output)
-              if (obj.content != null) {
-                setAnswer(obj.content.text || null)
-                const jd = obj.content.jsondata
-                if (jd && jd.jsonDataType) setMapData(jd)
-                else setMapData(null)
-              }
-
-              // Only accumulate messages in live output, not answers
-              if (obj.message !== undefined) {
-                setStreamedOutput((prev) => (prev ? prev + '\n' : '') + String(obj.message))
-              }
-            } catch (e) {
-              // ignore malformed objects
-            }
+          for (const line of lines) {
+            const trimmed = line.trim()
+            if (!trimmed) continue
+            const payload = trimmed.startsWith('data:') ? trimmed.slice(5).trim() : trimmed
+            consumeStreamPayload(payload)
           }
         }
 
-        // handle any remaining buffer
+        // Handle any remaining partial buffer at stream end.
         if (buf && buf.trim()) {
-          const { objects: remaining } = extractJsonObjects(buf)
-          for (const raw of remaining) {
-            try {
-              const data = JSON.parse(raw)
-              if (data.history !== undefined && data.history !== null) {
-                const h = data.history
-                const nonEmpty = typeof h === 'object'
-                  ? Array.isArray(h) ? h.length > 0 : Object.keys(h).length > 0
-                  : String(h).length > 0
-                if (nonEmpty) setHistory(h)
-              }
-              if (data.content != null) {
-                setAnswer(data.content.text || null)
-                const jd = data.content.jsondata
-                if (jd && jd.jsonDataType) setMapData(jd)
-                else setMapData(null)
-              }
-              if (data.status !== undefined) setStatus(data.status)
-              if (data.message !== undefined) {
-                setStreamedOutput((prev) => (prev ? prev + '\n' : '') + String(data.message))
-              }
-            } catch { /* ignore */ }
-          }
+          const trimmed = buf.trim()
+          const payload = trimmed.startsWith('data:') ? trimmed.slice(5).trim() : trimmed
+          consumeStreamPayload(payload)
         }
       } else {
         // Fall back to regular endpoint
@@ -158,11 +155,12 @@ export default function App() {
       if (!res.ok) throw new Error(data.error || 'Failed to reset history')
 
       setHistory([])
-      setStatus(data.status || 'Clear History')
-      setLiveMessage(data.message || 'History cleared')
+      setStatus(null)
+      setLiveMessage('')
       setStreamedOutput('')
       setAnswer(null)
       setMapData(null)
+      setPatternSaved(false)
     } catch (e) {
       setError(String(e))
     } finally {
@@ -245,7 +243,27 @@ export default function App() {
 
       {answer && (
         <div style={{ marginTop: 12 }}>
-          <strong>Answer:</strong>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <strong>Answer:</strong>
+            <button
+              onClick={savePattern}
+              disabled={patternSaved || patternSaving || loading}
+              title={patternSaved ? 'Pattern saved' : patternSaving ? 'Saving...' : 'Save this pattern for future queries'}
+              style={{
+                background: 'none',
+                border: 'none',
+                cursor: (patternSaved || patternSaving) ? 'default' : 'pointer',
+                fontSize: 22,
+                padding: '2px 6px',
+                opacity: patternSaving ? 0.3 : 1,
+                filter: 'none',
+                color: 'inherit',
+                transition: 'opacity 0.2s ease',
+              }}
+            >
+              {patternSaved ? '✅ Saved' : patternSaving ? '⏳' : '👍'}
+            </button>
+          </div>
           <div
             className="markdown-content"
             style={{

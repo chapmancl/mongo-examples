@@ -64,6 +64,19 @@ class MongoMCPMiddleware(Middleware):
             logger.error(f"Failed to load annotations for endpoint {self.endpoint_name}:\r\n {e}")
             return None
 
+    def refresh_active_endpoints(self) -> list:
+        """Re-query active endpoints from MongoDB so newly activated entries are picked up."""
+        if self._is_local:
+            return self.active_endpoints
+        try:
+            if self.mongo_client.sync_connect_to_mongodb():
+                self.active_endpoints = list(
+                    self.mongo_client.get_collection().distinct("Name", {"active": True})
+                )
+        except Exception as e:
+            logger.error(f"Failed to refresh active endpoints: {e}")
+        return self.active_endpoints
+
     def check_authorization(self, token: str):
         """Check if the provided token is valid"""
         allowed = False

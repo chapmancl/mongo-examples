@@ -56,3 +56,29 @@ Build and run from repository root:
 docker build -t mcp-webui ./webui
 docker run --rm -p 8000:8000 mcp-webui
 ```
+
+## Pattern Cache (AI Tool Routing)
+
+When `AI_TOOL_ROUTING` is enabled, the tool router caches successful query patterns in the `mcp_patterns` collection. To enable semantic matching of similar questions, create a vector search index on your MongoDB Atlas cluster:
+
+```javascript
+db.mcp_patterns.createSearchIndex({
+  name: "pattern_embedding_index",
+  type: "vectorSearch",
+  definition: {
+    fields: [{
+      path: "embedding",
+      type: "vector",
+      numDimensions: 1024,
+      similarity: "cosine"
+    },
+    {
+      "type": "filter",
+      "path": "tool_scope"
+    }
+    ]
+  }
+})
+```
+
+Without this index, pattern matching falls back to exact hash matching only.

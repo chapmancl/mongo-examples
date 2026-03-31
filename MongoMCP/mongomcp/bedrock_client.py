@@ -7,10 +7,12 @@ import datetime
 import json
 import re
 import asyncio
+import time
 import traceback
 from typing import Any, Callable, Dict, List, Optional
 import logging
 import boto3
+from botocore.config import Config as BotoConfig
 from botocore.exceptions import ClientError
 
 # Configure logging
@@ -31,7 +33,15 @@ class BedrockClient:
     """
     def __init__(self, settings):
         self.settings = settings
-        self.bedrock_client = boto3.client('bedrock-runtime', region_name=self.settings.aws_region)
+        self.bedrock_client = boto3.client(
+            'bedrock-runtime',
+            region_name=self.settings.aws_region,
+            config=BotoConfig(
+                read_timeout=120,       # seconds to wait for a response chunk
+                connect_timeout=10,     # seconds to establish connection
+                retries={"max_attempts": 2, "mode": "adaptive"},
+            ),
+        )
         self.mcp_tools = None
         self.mcp_call = None
         self.llm_setup = False
@@ -132,6 +142,35 @@ class BedrockClient:
             return None
         return None
 
+    async def invoke_bedrock_text(self, prompt: str, system: Optional[str] = None) -> str:
+        """Plain text invocation with no tool config — single user turn, returns the assistant text.
+
+        Useful for lightweight tasks (e.g. tool routing, summarisation) that do not need
+        the full MCP tool loop.  Uses asyncio.to_thread so it is safe to await from async
+        code without blocking the event loop.
+
+        Args:
+            prompt: The user message text.
+            system:  Optional system prompt string.
+
+        Returns:
+            The assistant's response text, or an empty string on failure.
+        """
+        converse_input: Dict[str, Any] = {
+            "modelId": self.settings.LLM_MODEL_ID,
+            "messages": [{"role": "user", "content": [{"text": prompt}]}],
+        }
+        try:
+            response = await asyncio.to_thread(self.bedrock_client.converse, **converse_input)
+            text = ""
+            for block in response.get("output", {}).get("message", {}).get("content", []):
+                if "text" in block:
+                    text += block["text"]
+            return text
+        except Exception as e:
+            logger.warning(f"invoke_bedrock_text failed: {e}")
+            return ""
+
     # Keep this method as the core Bedrock execution path.
     # It accepts a unified request payload so each subclass can own
     # prompt/context/history formatting for its own call surface.
@@ -214,7 +253,14 @@ class BedrockClient:
                 if self.system is not None:
                     converse_input["system"] = self.system
 
+                t0 = time.monotonic()
                 response = self.bedrock_client.converse(**converse_input)
+                elapsed_ms = (time.monotonic() - t0) * 1000
+                self._emit_progress(
+                    self.message_handler,
+                    f"Bedrock completed in {elapsed_ms:.0f}ms",
+                    status="LLM Response Received",
+                )
 
                 # Aggregate usage statistics
                 itt_used = response['usage']
@@ -264,10 +310,12 @@ class BedrockClient:
                             tool_name = tool_req['name']
                             tool_input = tool_req['input']
                             tool_use_id = tool_req['toolUseId']
-                            #print(f"Executing tool:{tool_use_id}-{tool_name} with input: {tool_input}")
+                            self._emit_progress(self.message_handler, f"Calling tool: {tool_name}", status="Tool Execution")
                             # Execute the MCP tool call (with caching)
                             try:
                                 tool_result = await self._call_mcp_tool(tool_name, tool_input)
+                                result_len = len(str(tool_result))
+                                self._emit_progress(self.message_handler, f"Tool {tool_name} returned {result_len} chars", status="Tool Complete")
                                 tool_results.append({
                                     "toolResult": {
                                         "toolUseId": tool_use_id,
@@ -291,19 +339,24 @@ class BedrockClient:
                         if tool_results:
                             tool_message = {"role": "user", "content": tool_results}
                             messages.append(tool_message)              
-                            return_obj["history"] = messages  
+                            return_obj["history"] = messages
+                            total_result_chars = sum(len(str(tr)) for tr in tool_results)
+                            self._emit_progress(
+                                self.message_handler,
+                                f"Sending {len(tool_results)} tool result(s) ({total_result_chars} chars) back to Bedrock...",
+                                status="Tool Results",
+                            )
                             continue  # Continue the conversation loop
                     
                     # If no more tool calls, then we're done and return the response
+                    self._emit_progress(self.message_handler, "No more tool calls, preparing final response...", status="Finalizing")
                     return_obj["stats"] = {"total_itterations": iteration + 1, "max_itterations": self.max_iterations}     
-                    # put the last message content as the main response
+                    # Always pass the raw assistant text through unchanged.
+                    # JSON extraction is handled downstream via [JSON_DATA_START]
+                    # tags only — no brace-counting.
                     if len(messages) > 0 and messages[-1]["role"] == "assistant":
                         msg = messages[-1]["content"][0]["text"]
-                        jobj = self._try_parse_json(msg)
-                        if jobj:
-                            return_obj["response"] = jobj
-                        else:
-                            return_obj["response"] = msg
+                        return_obj["response"] = msg
                     return return_obj
                 
                 # If we get here, there was no content to process

@@ -9,6 +9,10 @@ from aws_settings import settings
 from mongomcp.agent.cached_query_processor import CachedQueryProcessor
 import queue
 import threading
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 
 class QueryResponse(BaseModel):
     content: Optional[dict] = None
@@ -38,6 +42,7 @@ class APIQueryProcessor:
         self._init_error: Optional[Exception] = None
         self._message_queue: queue.Queue = queue.Queue()
         self._history_cleared: bool = False
+        logging.info(f"Loading CachedQueryProcessor with endpoint: {settings.mongo_mcp_root}")
         self._impl: CachedQueryProcessor = CachedQueryProcessor(settings, self._handle_message)
 
     def _ensure_impl(self) -> None:
@@ -95,11 +100,18 @@ class APIQueryProcessor:
         self._ensure_impl()
         self._impl.history = None
         self._history_cleared = True
+        # Drain any stale messages so they don't replay on the next query
+        try:
+            while True:
+                self._message_queue.get_nowait()
+        except queue.Empty:
+            pass
         return QueryResponse(status="Clear History", message="History cleared", history=[])
 
     def get_history(self) -> QueryResponse:
         self._ensure_impl()
-        return QueryResponse(status="Get History", message="Completed", history=self._impl.history)
+        ui_history = self._trim_history_for_ui(self._impl.history)
+        return QueryResponse(status="Get History", message="Completed", history=ui_history)
 
     def get_cache_stats(self) -> QueryResponse:
         self._ensure_impl()
@@ -121,3 +133,54 @@ class APIQueryProcessor:
         answer, jsondata, history = self._impl.query_with_mcp_tools(request.input, history)
         content = {"text": answer, "jsondata": jsondata}
         return QueryResponse(status="Query Completed", message="Completed", content=content, history=history)
+
+    @staticmethod
+    def _trim_history_for_ui(history: Optional[List[Any]], max_text_len: int = 2000) -> Optional[List[Any]]:
+        """Return a shallow copy of history with oversized tool-result text truncated.
+
+        Only affects toolResult content blocks — user/assistant text is left intact.
+        The server-side history (used for Bedrock context) is untouched.
+        """
+        if not history:
+            return history
+        trimmed = []
+        for msg in history:
+            content = msg.get("content")
+            if not isinstance(content, list):
+                trimmed.append(msg)
+                continue
+            needs_trim = any(
+                isinstance(block, dict)
+                and "toolResult" in block
+                and any(
+                    isinstance(c, dict) and len(c.get("text", "")) > max_text_len
+                    for c in block["toolResult"].get("content", [])
+                )
+                for block in content
+            )
+            if not needs_trim:
+                trimmed.append(msg)
+                continue
+            new_content = []
+            for block in content:
+                if isinstance(block, dict) and "toolResult" in block:
+                    tr = block["toolResult"]
+                    new_parts = []
+                    for c in tr.get("content", []):
+                        if isinstance(c, dict) and "text" in c and len(c["text"]) > max_text_len:
+                            new_parts.append({"text": c["text"][:max_text_len] + f"... [truncated {len(c['text'])} chars]"})
+                        else:
+                            new_parts.append(c)
+                    new_content.append({"toolResult": {**tr, "content": new_parts}})
+                else:
+                    new_content.append(block)
+            trimmed.append({**msg, "content": new_content})
+        return trimmed
+
+    def save_pattern(self) -> QueryResponse:
+        """Persist the routing pattern from the last query into the pattern cache."""
+        self._ensure_impl()
+        saved = self._impl.save_pattern()
+        if saved:
+            return QueryResponse(status="Pattern Saved", message="Pattern saved successfully")
+        return QueryResponse(status="No Pattern", message="No pattern available to save")

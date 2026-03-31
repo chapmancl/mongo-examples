@@ -5,15 +5,20 @@ from ..bedrock_client import BedrockClient
 JSON_DATA_START = '[JSON_DATA_START]'
 JSON_DATA_END = '[JSON_DATA_END]'
 
-def _remove_json_block(text: str):
-    """Strip [JSON_DATA_START]...[JSON_DATA_END] from text.
-    Returns clean_text with the JSON block removed."""
+def _extract_json_block(text: str):
+    """Extract JSON from [JSON_DATA_START]...[JSON_DATA_END] tags.
+    Returns (parsed_json, clean_text) or (None, original_text) if no tags found."""
     start_idx = text.find(JSON_DATA_START)
     end_idx = text.find(JSON_DATA_END)
-    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-        clean = (text[:start_idx] + text[end_idx + len(JSON_DATA_END):]).strip()
-        return clean
-    return text.strip()
+    if start_idx == -1 or end_idx == -1 or end_idx <= start_idx:
+        return None, text.strip()
+    json_str = text[start_idx + len(JSON_DATA_START):end_idx].strip()
+    clean = (text[:start_idx] + text[end_idx + len(JSON_DATA_END):]).strip()
+    try:
+        parsed = json.loads(json_str)
+        return parsed, clean
+    except (json.JSONDecodeError, TypeError):
+        return None, text.strip()
 
 class WebUiBedrockClient(BedrockClient):
     """Web UI Bedrock client with text-oriented response normalization helpers."""
@@ -96,8 +101,7 @@ class WebUiBedrockClient(BedrockClient):
                 "history": history,
             }
 
-        # Always prefer the raw assistant text from history — it preserves the
-        # [JSON_DATA_START] tags that _try_parse_json may have consumed upstream.
+        # Get the raw assistant text from history
         raw_text = None
         if history and history[-1].get("role") == "assistant":
             text_parts = [
@@ -107,27 +111,22 @@ class WebUiBedrockClient(BedrockClient):
             if text_parts:
                 raw_text = " ".join(text_parts)
 
-        if "response" in response_obj:
-            response = response_obj["response"]
-            if isinstance(response, (dict, list)):
-                # _try_parse_json already parsed the JSON block — use it as jsondata
-                # and strip the JSON block from the raw history text
-                clean_text = _remove_json_block(raw_text) if raw_text else ""
-                return {
-                    "response_text": clean_text or raw_text or "",
-                    "jsondata": response,
-                    "history": history,
-                }
-            # Plain string response — extract JSON block if present
-            clean_text = _remove_json_block(str(response))
+        # Use the response field as fallback source
+        if not raw_text and "response" in response_obj:
+            raw_text = str(response_obj["response"])
+
+        if not raw_text:
             return {
-                "response_text": clean_text,
+                "response_text": "No response generated",
                 "jsondata": None,
                 "history": history,
             }
 
+        # Only extract JSON via [JSON_DATA_START]...[JSON_DATA_END] tags.
+        # All other JSON stays in the markdown as-is for display.
+        tag_json, clean_text = _extract_json_block(raw_text)
         return {
-            "response_text": "No response generated",
-            "jsondata": None,
+            "response_text": clean_text,
+            "jsondata": tag_json,  # None if no tags found
             "history": history,
         }

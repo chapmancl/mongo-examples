@@ -28,7 +28,7 @@ from .mongo_token_verifier import MongoTokenVerifier
 from .mongodb_client import MongoDBClient
 
 # Package version
-__version__ = "2.0.0"
+__version__ = "2.0.2"
 
 # Expose main classes at package level
 __all__ = [
