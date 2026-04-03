@@ -1,4 +1,5 @@
 import json
+import os
 from typing import Any, Dict, List, Optional, Annotated
 import logging
 from pydantic import Field
@@ -8,8 +9,14 @@ from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastmcp.server.dependencies import AccessToken, get_access_token
 from starlette.responses import JSONResponse
-from AWS_settings import settings 
-#from local_settings import settings # change this to use AWS_settings
+USE_LOCAL_MODE = os.getenv('USE_LOCAL_MODE', 'false').lower() == "true"
+
+if USE_LOCAL_MODE:
+    # Start with : > fastapi run mongo_mcp.py --port 8001
+    from local_settings import settings
+else:
+    # Running with kubernetes in EKS/Fargate
+    from AWS_settings import settings as settings
 from mongomcp import MongoDBQueryServer, MongoMCPMiddleware, ServerBedrockClient, MongoTokenVerifier, __version__ as MCP_VERSION
 from mongomcp.agent.tool_router import ToolRouter
 import traceback
@@ -369,6 +376,7 @@ async def get_optional_token(
     return verify_optional_token(credentials)
 
 # Dispatch table: tool name → .fn reference. Add new tools here when registered with @mcp.tool().
+'''
 _TOOL_DISPATCH = {
     "upsert_document":    upsert_document.fn,
     "vector_search":      vector_search.fn,
@@ -377,6 +385,17 @@ _TOOL_DISPATCH = {
     "get_unique_values":  get_unique_values.fn,
     "get_collection_info": get_collection_info.fn,
     "aggregate_query":    aggregate_query.fn,
+}
+'''
+
+_TOOL_DISPATCH = {
+    "upsert_document":    upsert_document,
+    "vector_search":      vector_search,
+    "text_search":        text_search,
+    "geospatial_search":  geospatial_search,
+    "get_unique_values":  get_unique_values,
+    "get_collection_info": get_collection_info,
+    "aggregate_query":    aggregate_query,
 }
 
 async def tool_handler(token: AccessToken, toolname: str, tool_input: dict) -> dict:
@@ -450,7 +469,8 @@ async def http_get_tools_config(token: Annotated[str, Depends(get_token)]) -> Di
 @app.get(f"/{settings.TOOL_NAME}/collection_info")
 async def http_get_collection_info(token: Annotated[str, Depends(get_token)]) -> Dict[str, Any]:
     """Regular HTTP GET endpoint for collection info"""        
-    results = await get_collection_info.fn()
+    #results = await get_collection_info.fn()
+    results = await get_collection_info()
     return {"collection_info": results}
 
 
@@ -526,7 +546,7 @@ async def invoke_llm(prompt_name: str, body: Dict[str, Any],
     
     """     
     if not "llm:invoke" in token.get("scope", []):
-        logger.error(f"Insufficient scope for invoke_llm: llm:invoke permission required for agent {token["agent_key"]}")
+        logger.error(f"Insufficient scope for invoke_llm: llm:invoke permission required for agent {token['agent_key']}")
         raise HTTPException(status_code=403, detail="Insufficient scope")
 
     context = body.get("context")

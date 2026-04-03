@@ -5,8 +5,9 @@ class LocalSettings:
     def __init__(self):
         self.aws_region = os.getenv('AWS_REGION', 'us-east-2')        
         self.EMBEDDING_MODEL_ID = "amazon.titan-embed-text-v2:0"
-        self.mcp_config_db = "mcp_config"
-        self.mcp_config_col = "mcp_tools"
+        self.mcp_config_db = os.getenv('MCP_CONFIG_DB', 'mcp_config')
+        self.mcp_config_col = os.getenv('MCP_CONFIG_COL', 'mcp_tools')
+        self.TOOL_NAME = os.getenv('MCP_TOOL_NAME', 'AirbnbSearch')
         self.LLM_MODEL_ID = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
         self.LLM_MAX_HISTORY = int(os.getenv('LLM_MAX_HISTORY', '20'))  # max messages kept in history before trimming
         self.LLM_MAX_ITERATIONS = int(os.getenv('LLM_MAX_ITERATIONS', '15'))
@@ -21,14 +22,15 @@ class LocalSettings:
             "***IMPORTANT: All output should be Markdown formatted for display within a div in an existing webpage. Do not include html, head, or body tags. Only include the inner content. Always use Markdown formatting.",
             "Only use vector_search with collections that have a search_indexes.type=vectorSearch.",
         ]
-        self.AUTH_TOKEN = ""
+        self.AUTH_TOKEN = "eyJhbGciOiJIUzI1NiIsImFwaV9rZXkiOiJiOWNiYjdjNS04ZjRlLTRmZTktYWRlMC0xNzRkNWJhYzM4NTAiLCJ0eXAiOiJKV1QifQ.eyJhZ2VudF9uYW1lIjoibG9jYWxfY29uc29sZV9jaGF0Ym90In0.uQPbIpQWqtEo-478400Ek5AuMW7f-QpY9itzmiXBCs4"
+
         
         
         # Hardcoded credentials for local development only.
         self._credentials: Dict[str, str] = {
-            "username": "mymongousername",
-            "password": "mymongopassword",
-            "mongoUrl": "mymongo.mongodb.net"
+            "username": os.getenv("MONGO_USERNAME", "main_user"),
+            "password": os.getenv("MONGO_PASSWORD", "private"),
+            "mongoUri": os.getenv("MONGO_URI", "localhost:27017")
         }
     
     def get_mongo_credentials(self) -> Dict[str, str]:
@@ -36,7 +38,7 @@ class LocalSettings:
         Fetch MongoDB credentials from AWS Secrets Manager.
         
         Returns:
-            Dict containing username, password, and mongoUrl
+            Dict containing username, password, and mongoUri
             
         Raises:
             Exception: If failed to fetch credentials
@@ -45,8 +47,8 @@ class LocalSettings:
 
       
     def mongo_url(self) -> str:
-        """Get MongoDB connection URL."""
-        return self._credentials['mongoUrl']
+        """Get MongoDB connection URI."""
+        return self._credentials['mongoUri']
 
     def mongo_timeout(self) -> int:
         """Get MongoDB timeout in milliseconds."""

@@ -1,11 +1,19 @@
 from typing import Any, List, Optional, Tuple
 import traceback
+import os
 import json
 import re
 from pydantic import BaseModel
 from typing import Optional, List, Any
 #from local_settings import settings # change this to use AWS settings 
-from aws_settings import settings
+USE_LOCAL_MODE = os.getenv('USE_LOCAL_MODE', 'false').lower() == "true"
+
+if USE_LOCAL_MODE:
+    # Start with : > fastapi run mongo_mcp.py --port 8001
+    from local_settings import settings
+else:
+    # Running with kubernetes in EKS/Fargate
+    from AWS_settings import settings as settings
 from mongomcp.agent.cached_query_processor import CachedQueryProcessor
 import queue
 import threading

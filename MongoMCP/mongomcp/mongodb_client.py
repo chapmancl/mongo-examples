@@ -26,6 +26,7 @@ class MongoDBClient:
         # default should always be the config collection because it is the only one we know about at first
         self._db_name = self.settings.mcp_config_db
         self._collection_name = self.settings.mcp_config_col
+        self.db_url = self.settings.mongo_url()
 
     def set_config(self, config: Dict) -> None:
         """Override the default tool configuration from a dictionary"""
@@ -76,6 +77,7 @@ class MongoDBClient:
         if self.db_url:
             m_url = self.db_url
         str_uri = f"mongodb+srv://{credentials['username']}:{credentials['password']}@{m_url}/"
+        print(f'MongoURI: {str_uri}, col: {self._db_name}{self._collection_name}')
         return str_uri
 
     def get_current_ip(self) -> str:
@@ -112,7 +114,7 @@ class MongoDBClient:
     
     async def ensure_connection(self):
         """Ensure MongoDB connection is established"""
-        print(f"connecting to mongodb {self._db_name} {self._collection_name}")
+        print(f"Connecting to mongodb {self._db_name} {self._collection_name}, {self.db_url}")
         ping_result = {}
         if not self._connection_initialized:
             ping_result = await self.connect_to_mongodb()
@@ -124,7 +126,8 @@ class MongoDBClient:
         """Initialize MongoDB connection using settings.py configuration"""
         ping_result = None
         try:
-            self.client = AsyncIOMotorClient(self.get_mongo_uri())
+            uri = self.get_mongo_uri()
+            self.client = AsyncIOMotorClient(uri)
             
             # Test the connection
             ping_result = await self.client.admin.command('ping')

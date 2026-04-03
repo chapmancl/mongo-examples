@@ -42,7 +42,9 @@ class MongoMCPMiddleware(Middleware):
                     logger.info(f"loading dynamic config for endpoint {self.endpoint_name}")
                 # load the config for this specific tool, then we load it for everything so we can return all tools on the shared endpoint 
                 # make 2 calls because we need this config regardless of active state 
-                doc = self.mongo_client.get_collection().find_one({"Name": self.endpoint_name})    
+                #print(f'Endpoint: {self.endpoint_name}')
+                doc = self.mongo_client.get_collection().find_one({"Name": self.endpoint_name})  
+                #print(doc)  
                 self.ANNOTATIONS = doc
                 self.endpoint_tools = self.ANNOTATIONS.get('tools', {})
                 #### load all active endpoints to return configs
