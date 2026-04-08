@@ -12,10 +12,10 @@ class LocalSettings:
         self.LLM_MAX_ITERATIONS = int(os.getenv('LLM_MAX_ITERATIONS', '15'))
         self.ENABLE_CACHE_POINTS = os.getenv('ENABLE_CACHE_POINTS', 'true').lower() in ['1', 'true', 'yes', 'on']
         self.ENABLE_BEDROCK_CACHING = True
-        self.ENABLE_MCP_TOOL_CACHING = True
+        self.ENABLE_MCP_TOOL_CACHING = False
         self.ENABLE_RESPONSE_CACHING = True
         self.CACHE_TTL = 300
-        self.mongo_mcp_root = os.getenv('MONGO_MCP_ROOT', "https://mongomcproot.example.com")
+        self.mongo_mcp_root = os.getenv('MONGO_MCP_ROOT', "http://localhost:8000")
         self.BEDROCK_SYSTEM_PROMPT_TEXTS = [
             "***IMPORTANT: if a vector_search tool is available, always use vector_search before aggregate_query",
             "***IMPORTANT: All output should be Markdown formatted for display within a div in an existing webpage. Do not include html, head, or body tags. Only include the inner content. Always use Markdown formatting.",

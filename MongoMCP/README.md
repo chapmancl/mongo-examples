@@ -2,6 +2,8 @@
 
 A configurable Model Context Protocol (MCP) server that dynamically loads tool configurations from MongoDB. Includes a Web UI agent frontend backed by Amazon Bedrock.
 
+![Architecture](../AgenticArchitecture.png)
+
 ## Architecture
 
 ```
@@ -18,6 +20,38 @@ mongomcp/agent/ Web UI subpackage: CachedQueryProcessor, ToolRouter, WebUiBedroc
 - AWS credentials in `~/.aws/` (Bedrock + Secrets Manager)
 - MongoDB Atlas cluster with an MCP config collection and target data collection(s)
 
+
+## Required Local Settings
+
+Before running the local setup, update the hardcoded MongoDB credentials in `local_settings.py`:
+
+```python
+self._credentials = {
+    "username": "your_mongodb_username",
+    "password": "your_mongodb_password",
+    "mongoUrl": "your_cluster.mongodb.net"
+}
+```
+
+This value must be set in both places:
+
+- `MongoMCP/local_settings.py`
+- `MongoMCP/webui/local_settings.py`
+
+The `mongoUrl` value is used by `tools/mongosetup.py` to rewrite `module_info.url` in the seeded `mcp_tools` documents.
+
+For the Web UI, you must also copy the token printed by the setup script into `webui/local_settings.py`:
+
+```python
+self.AUTH_TOKEN = "paste_the_AUTH_TOKEN_value_here"
+```
+
+Run the setup script once after updating credentials. It prints a line in this format:
+
+```bash
+AUTH_TOKEN = "..."
+```
+
 ## Quick Start
 
 ```bash
@@ -31,13 +65,49 @@ pip install -e ./mongomcp
 # 3. Install top-level dependencies
 pip install -r requirements.txt
 
-# 4. Run the MCP server
-make run-mcp
+# 4. Seed local MongoDB config data and agent identity
+python tools/mongosetup.py
 
-# 5. In a separate terminal, run the Web UI
+# 5. Run the MCP server
+fastapi run mongo_mcp.py --transport http --port 8000
+
+# 6. In a separate terminal, run the Web UI
 pip install -e "./mongomcp[agent]"
 pip install -r webui/requirements.txt
-make run-webui
+cd webui
+python app.py
+```
+
+## Local Setup Without Containers
+
+Running the project directly is the default local workflow.
+
+
+```bash
+python tools/mongosetup.py
+```
+
+This script uses local settings by default and will:
+
+- create the `mcp_config` database if it does not exist
+- create the `agent_identities`, `mcp_cache`, and `mcp_tools` collections
+- load `tools/mcp_config.mcp_tools.json` into `mcp_config.mcp_tools`
+- replace each `module_info.url` entry with the current local `settings.mongo_url` value
+- generate a default local JWT for `webui_chatuser`
+- upsert the generated metadata into `mcp_config.agent_identities`
+- print the `AUTH_TOKEN = "..."` line for local settings updates
+
+Then run the services directly:
+
+```bash
+fastmcp run mongo_mcp.py --transport http --port 8000
+```
+
+In a second terminal:
+
+```bash
+cd webui
+python app.py
 ```
 
 ## Environment Variables
@@ -82,6 +152,14 @@ make build-webui     # Web UI only
 ```bash
 make run-mcp         # fastapi on port 8000
 make run-webui       # Flask dev server on port 8001
+```
+
+Equivalent direct commands without `make`:
+
+```bash
+python tools/mongosetup.py
+fastmcp run mongo_mcp.py --transport http --port 8000
+cd webui && python app.py
 ```
 
 ### Run from containers
@@ -147,7 +225,7 @@ The server container installs `mongomcp` only. The WebUI container installs `mon
 
 The MCP server loads its tool definitions from a MongoDB collection at startup. Each document defines a complete server configuration — which database/collection to query, which tools to expose, their parameters, and index names.
 
-See `mongo_mcp_annotations.json` for example configurations. The `MCP_TOOL_NAME` environment variable selects which document to load.
+See `tools/mcp_config.mcp_tools.json` for the local bootstrap configuration source. The `MCP_TOOL_NAME` environment variable selects which document to load.
 
 ### Configuration document structure
 
