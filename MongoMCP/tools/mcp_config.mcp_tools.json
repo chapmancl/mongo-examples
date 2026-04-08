@@ -12,12 +12,18 @@
       "description": "Perform semantic vector similarity search on MongoDB collection using AI embeddings.\n\nThis tool converts natural language queries into vector embeddings using Amazon Titan Embeddings v2 and finds semantically similar property listings. It's ideal for finding properties based on meaning and context rather than exact keyword matches.\n\nUse cases:\n- \"Find a cozy apartment near Central Park\" (semantic understanding of 'cozy')\n- \"Spacious family home with modern amenities\" (understands family needs)\n- \"Romantic getaway with city views\" (contextual search)",
       "index": "listing_vector_index",
       "required": [
-        "query_text"
+        "query_text",
+        "collection"
       ],
       "parameters": {
         "query_text": {
           "type": "str",
           "description": "Natural language query describing desired property characteristics. The text will be automatically converted to a 1024-dimensional vector."
+        },
+        "collection": {
+          "type": "str",
+          "description": "The name of the collection this query will execute against. must be listingsAndReviews",
+          "value": "listingsAndReviews"
         },
         "limit": {
           "type": "int",
@@ -59,14 +65,20 @@
         "transit": 0,
         "access": 0
       },
+      "collection":"listingsAndReviews",
       "returns": "JSON with results array containing matching properties ranked by semantic similarity, each with a similarity score (0.0-1.0, higher is more similar)."
     },    
     "get_unique_values": {
       "description": "Get unique values for a specific field in the MongoDB collection. This tool retrieves all unique values for a specified field to determine what filter options are available when using vector_search. Use the get_collection_info tool to see what fields are available in the collection, then use this tool to see what values exist for those filters.",
       "required": [
-        "field"
+        "field",
+        "collection"
       ],
       "parameters": {
+        "collection": {
+          "type": "str",
+          "description": "The name of the collection this query will execute against. This tool can execute against any collection."
+        },
         "field": {
           "type": "str",
           "description": "The field name to get unique values for. Can be nested fields using dot notation (e.g., \"address.market\", \"address.country_code\")."
@@ -84,9 +96,14 @@
       "description": "Execute a custom MongoDB aggregation pipeline query on the collection.\n\nThis tool allows you to run complex MongoDB aggregation queries with full flexibility. You can use any MongoDB aggregation stage including $match, $group, $project, $sort, $lookup, $unwind, $addFields, and many others. This is the most powerful tool for complex data analysis and custom queries.",
       "reference_documentation": "https://www.mongodb.com/docs/manual/reference/mql/aggregation-stages/#std-label-aggregation-pipeline-operator-reference",
       "required": [
-        "pipeline"
+        "pipeline",
+        "collection"
       ],
       "parameters": {
+        "collection": {
+          "type": "str",
+          "description": "The name of the collection this query will execute against. This tool can execute against any collection."
+        },
         "pipeline": {
           "type": "List[Dict[str, Any]]",
           "description": "MongoDB aggregation pipeline as a list of stage objects. Each stage should be a dictionary representing a MongoDB aggregation stage like $match, $group, $project, $sort, etc."
@@ -116,9 +133,14 @@
     "get_unique_values": {
       "description": "Get unique values for a specific field in the MongoDB collection. This tool retrieves all unique values for a specified field to determine what filter options are available when using vector_search. Use the get_collection_info tool to see what fields are available in the collection, then use this tool to see what values exist for those filters.",
       "required": [
-        "field"
+        "field",
+        "collection"
       ],
       "parameters": {
+        "collection": {
+          "type": "str",
+          "description": "The name of the collection this query will execute against. This tool can execute against any collection."
+        },
         "field": {
           "type": "str",
           "description": "The field name to get unique values for. Can be nested fields using dot notation (e.g., \"address.market\", \"address.country_code\")."
@@ -136,9 +158,14 @@
       "description": "Execute a custom MongoDB aggregation pipeline query on the collection.\n\nThis tool allows you to run complex MongoDB aggregation queries with full flexibility. You can use any MongoDB aggregation stage including $match, $group, $project, $sort, $lookup, $unwind, $addFields, and many others. This is the most powerful tool for complex data analysis and custom queries.",
       "reference_documentation": "https://www.mongodb.com/docs/manual/reference/mql/aggregation-stages/#std-label-aggregation-pipeline-operator-reference",
       "required": [
-        "pipeline"
+        "pipeline",
+        "collection"
       ],
       "parameters": {
+        "collection": {
+          "type": "str",
+          "description": "The name of the collection this query will execute against. This tool can execute against any collection."
+        },
         "pipeline": {
           "type": "List[Dict[str, Any]]",
           "description": "MongoDB aggregation pipeline as a list of stage objects. Each stage should be a dictionary representing a MongoDB aggregation stage like $match, $group, $project, $sort, etc."
@@ -168,9 +195,14 @@
     "get_unique_values": {
       "description": "Get unique values for a specific field in the MongoDB collection. This tool retrieves all unique values for a specified field to determine what filter options are available when using vector_search. Use the get_collection_info tool to see what fields are available in the collection, then use this tool to see what values exist for those filters.",
       "required": [
-        "field"
+        "field",
+        "collection"
       ],
       "parameters": {
+        "collection": {
+          "type": "str",
+          "description": "The name of the collection this query will execute against. This tool can execute against any collection."
+        },
         "field": {
           "type": "str",
           "description": "The field name to get unique values for. Can be nested fields using dot notation."
@@ -188,9 +220,14 @@
       "description": "Execute a custom MongoDB aggregation pipeline query on the collection.\n\nThis tool allows you to run complex MongoDB aggregation queries with full flexibility. You can use any MongoDB aggregation stage including $match, $group, $project, $sort, $lookup, $unwind, $addFields, and many others. This is the most powerful tool for complex data analysis and custom queries.",
       "reference_documentation": "https://www.mongodb.com/docs/manual/reference/mql/aggregation-stages/#std-label-aggregation-pipeline-operator-reference",
       "required": [
-        "pipeline"
+        "pipeline",
+        "collection"
       ],
       "parameters": {
+        "collection": {
+          "type": "str",
+          "description": "The name of the collection this query will execute against. This tool can execute against any collection."
+        },
         "pipeline": {
           "type": "List[Dict[str, Any]]",
           "description": "MongoDB aggregation pipeline as a list of stage objects. Each stage should be a dictionary representing a MongoDB aggregation stage like $match, $group, $project, $sort, etc."
@@ -206,4 +243,130 @@
     }
   },
   "active": false
-}]
+},
+{
+  "Name": "shipwreckSearch",
+  "module_info": {
+    "title": "MongoDB MCP Server for searching historical shipwreck data",
+    "description": "A fastMCP MCP server that provides search capabilities using MongoDB's aggregation pipeline.",
+    "database": "sample_geospatial",
+    "collection": "shipwrecks",
+    "url": "demo1.mongodb.net"
+  },
+  "tools": {
+    "get_unique_values": {
+      "description": "Get unique values for a specific field in the MongoDB collection. This tool retrieves all unique values for a specified field to determine what filter options are available when using vector_search. Use the get_collection_info tool to see what fields are available in the collection, then use this tool to see what values exist for those filters.",
+      "required": [
+        "field",
+        "collection"
+      ],
+      "parameters": {
+        "collection": {
+          "type": "str",
+          "description": "The name of the collection this query will execute against. This tool can execute against any collection."
+        },
+        "field": {
+          "type": "str",
+          "description": "The field name to get unique values for. Can be nested fields using dot notation."
+        }
+      },
+      "returns": "JSON with unique values array for the specified field, along with count information."
+    },
+    "get_collection_info": {
+      "description": "Get comprehensive information about the MongoDB collection, database statistics, and search capabilities.\n\nThis tool provides essential metadata about the current database connection and collection status, including document counts, storage size, available indexes, and search configuration. Use this tool to understand the current state of the data and search capabilities.",
+      "required": [],
+      "parameters": {},
+      "returns": "JSON containing complete collection metadata including document count, size, indexes, and search configuration details."
+    },
+    "aggregate_query": {
+      "description": "Execute a custom MongoDB aggregation pipeline query on the collection.\n\nThis tool allows you to run complex MongoDB aggregation queries with full flexibility. You can use any MongoDB aggregation stage including $match, $group, $project, $sort, $lookup, $unwind, $addFields, and many others. This is the most powerful tool for complex data analysis and custom queries.",
+      "reference_documentation": "https://www.mongodb.com/docs/manual/reference/mql/aggregation-stages/#std-label-aggregation-pipeline-operator-reference",
+      "required": [
+        "pipeline",
+        "collection"
+      ],
+      "parameters": {
+        "collection": {
+          "type": "str",
+          "description": "The name of the collection this query will execute against. This tool can execute against any collection."
+        },
+        "pipeline": {
+          "type": "List[Dict[str, Any]]",
+          "description": "MongoDB aggregation pipeline as a list of stage objects. Each stage should be a dictionary representing a MongoDB aggregation stage like $match, $group, $project, $sort, etc."
+        },
+        "limit": {
+          "type": "Optional[int]",
+          "default": null,
+          "constraints": "ge=1, le=1000",
+          "description": "Optional limit to apply to the results. If not specified, no limit will be applied. Recommended for large result sets to avoid memory issues."
+        }
+      },
+      "returns": "JSON with results array containing the aggregation results, along with metadata about the query execution including result count and pipeline information."
+    },
+    "geospatial_search": {
+      "description": "Perform geospatial search to find shipwrecks within a specified distance of a given location. This tool uses MongoDB's $geoNear aggregation stage to find documents sorted by proximity. Use get_collection_info to discover available indexes. Use get_unique_values to determine valid filter values before applying filters.",
+      "location_field": "coordinates",
+      "required": [
+        "longitude",
+        "latitude",
+        "collection"
+      ],
+      "parameters": {
+        "longitude": {
+          "type": "float",
+          "description": "Longitude of the center point for the geospatial search. Must be between -180 and 180."
+        },
+        "latitude": {
+          "type": "float",
+          "description": "Latitude of the center point for the geospatial search. Must be between -90 and 90."
+        },
+        "max_distance_meters": {
+          "type": "Optional[float]",
+          "default": null,
+          "constraints": "ge=0",
+          "description": "Optional maximum distance from the center point in meters. If not specified, no upper distance limit is applied."
+        },
+        "min_distance_meters": {
+          "type": "Optional[float]",
+          "default": null,
+          "constraints": "ge=0",
+          "description": "Optional minimum distance from the center point in meters. If not specified, no lower distance limit is applied."
+        },
+        "filters": {
+          "type": "List",
+          "default": null,
+          "description": "Optional list of filters to narrow search results. Each filter should be a list with [field, value] format. Use get_unique_values to discover available filter values for any field.",
+          "example_usage": [
+            "[[\"feature_type\", \"Wrecks - Submerged, dangerous\"]]"
+          ]
+        },
+        "limit": {
+          "type": "int",
+          "default": 10,
+          "constraints": "ge=1, le=100",
+          "description": "Maximum number of results to return (default: 10, max: 100)."
+        },
+        "collection": {
+          "type": "str",
+          "description": "This value should always be shipwrecks for this tool"
+        },
+        "geo_field": {
+          "type": "str",
+          "default": "coordinates",
+          "description": "The name of the field containing geospatial data. This should be a GeoJSON point field. Default is 'coordinates'."
+        }
+      },
+      "projection": {
+        "_id": 1,
+        "name": 1,
+        "feature_type": 1,
+        "coordinates": 1,
+        "distance_meters": 1
+      },
+      "returns": "JSON with results array containing shipwrecks located within the specified distance of the given coordinates, sorted by proximity, each including a distance_meters field."
+    }
+  },
+  "active": true
+}
+
+]
