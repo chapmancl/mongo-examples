@@ -4,8 +4,8 @@ import json
 import re
 from pydantic import BaseModel
 from typing import Optional, List, Any
-#from local_settings import settings # change this to use AWS settings 
-from aws_settings import settings
+from local_settings import settings  
+#from aws_settings import settings # change this to use AWS_settings
 from mongomcp.agent.cached_query_processor import CachedQueryProcessor
 import queue
 import threading

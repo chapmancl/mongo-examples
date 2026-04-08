@@ -6,15 +6,16 @@ This project runs as a single server:
 
 ## Prerequisites
 
-- Python 3.10+
+- Python 3.11+
 - Node.js 18+ and npm
 
 ## Build
 
-Run from the repository root (`mcpclient`):
+Run from the repository root (`MongoMCP`):
 
 ```bash
-python -m pip install -r webui/backend/requirements.txt
+pip install -e ../mongomcp[agent]
+pip install -r webui/requirements.txt
 cd webui/frontend
 npm install
 npm run build
@@ -25,7 +26,7 @@ npm run build
 From `webui`:
 
 ```bash
-python backend/app.py
+python app.py
 ```
 
 ## One-command build and run

@@ -8,8 +8,8 @@ from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastmcp.server.dependencies import AccessToken, get_access_token
 from starlette.responses import JSONResponse
-from AWS_settings import settings 
-#from local_settings import settings # change this to use AWS_settings
+#from AWS_settings import settings # change this to use AWS_settings
+from local_settings import settings 
 from mongomcp import MongoDBQueryServer, MongoMCPMiddleware, ServerBedrockClient, MongoTokenVerifier, __version__ as MCP_VERSION
 from mongomcp.agent.tool_router import ToolRouter
 import traceback

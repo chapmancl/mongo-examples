@@ -49,7 +49,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Generate an MCP-style HS256 JWT and metadata"
     )
-    parser.add_argument("--agent-name", default="console_chatbot", help="Agent name")
+    parser.add_argument("--agent-name", default="webui_chatuser", help="Agent name")
     parser.add_argument("--agent-key", default=None, help="Agent UUID (default: random uuid4)")
     parser.add_argument(
         "--pvk",
