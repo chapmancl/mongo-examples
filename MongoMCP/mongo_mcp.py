@@ -368,15 +368,21 @@ async def get_optional_token(
 ):
     return verify_optional_token(credentials)
 
-# Dispatch table: tool name → .fn reference. Add new tools here when registered with @mcp.tool().
+def _resolve_tool_callable(tool_obj):
+    """Return the underlying callable for either FastMCP tool wrappers or plain functions."""
+    # need this for windows support.... 
+    return getattr(tool_obj, "fn", tool_obj)
+
+
+# Dispatch table: tool name -> callable. Add new tools here when registered with @mcp.tool().
 _TOOL_DISPATCH = {
-    "upsert_document":    upsert_document.fn,
-    "vector_search":      vector_search.fn,
-    "text_search":        text_search.fn,
-    "geospatial_search":  geospatial_search.fn,
-    "get_unique_values":  get_unique_values.fn,
-    "get_collection_info": get_collection_info.fn,
-    "aggregate_query":    aggregate_query.fn,
+    "upsert_document":    _resolve_tool_callable(upsert_document),
+    "vector_search":      _resolve_tool_callable(vector_search),
+    "text_search":        _resolve_tool_callable(text_search),
+    "geospatial_search":  _resolve_tool_callable(geospatial_search),
+    "get_unique_values":  _resolve_tool_callable(get_unique_values),
+    "get_collection_info": _resolve_tool_callable(get_collection_info),
+    "aggregate_query":    _resolve_tool_callable(aggregate_query),
 }
 
 async def tool_handler(token: AccessToken, toolname: str, tool_input: dict) -> dict:

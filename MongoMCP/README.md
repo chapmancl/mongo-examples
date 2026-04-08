@@ -46,7 +46,7 @@ For the Web UI, you must also copy the token printed by the setup script into `w
 self.AUTH_TOKEN = "paste_the_AUTH_TOKEN_value_here"
 ```
 
-Run the setup script once after updating credentials. It prints a line in this format:
+Run the setup scripts below after setting credentials. You will see an output line in this format:
 
 ```bash
 AUTH_TOKEN = "..."
@@ -68,13 +68,23 @@ pip install -r requirements.txt
 # 4. Seed local MongoDB config data and agent identity
 python tools/mongosetup.py
 
+# 5. Generate the airbnb vectors
+python tools/embedairbnb.py
+
 # 5. Run the MCP server
 fastapi run mongo_mcp.py --transport http --port 8000
 
-# 6. In a separate terminal, run the Web UI
+# 6. In a separate terminal install the webui
 pip install -e "./mongomcp[agent]"
 pip install -r webui/requirements.txt
-cd webui
+
+# 7. Build the front end
+cd webui/frontend
+npm install
+npm run build
+
+# 8. in the webui dir run the web server
+cd ../
 python app.py
 ```
 
