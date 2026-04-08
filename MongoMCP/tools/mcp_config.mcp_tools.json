@@ -60,44 +60,7 @@
         "access": 0
       },
       "returns": "JSON with results array containing matching properties ranked by semantic similarity, each with a similarity score (0.0-1.0, higher is more similar)."
-    },
-    "text_search": {
-      "description": "Perform traditional keyword-based text search on MongoDB collection using Atlas Search. Do not use this tool for semantic searches - use vector_search instead.\n\nThis tool searches for exact keyword matches and full-text indexing with stemming and fuzzy matching. fields include: name, description, summary, amenities, beds, and property_type. Use only for finding properties with specific features or characteristics using precise terms.\n\nUse cases:\n- \"2 bedroom apartment WiFi kitchen\" (exact feature matching)\n- \"Manhattan studio elevator\" (location and amenity search)\n- \"house parking garage 3 beds\" (specific requirements)\n- \"Airbnb Brooklyn\" (location-based search)",
-      "index": "search_index",
-      "fields_searched": [
-        "name",
-        "description",
-        "summary",
-        "amenities",
-        "beds",
-        "property_type"
-      ],
-      "required": [
-        "query_text"
-      ],
-      "parameters": {
-        "query_text": {
-          "type": "str",
-          "description": "Keywords or phrases to search for. Can include property features, locations, amenities, or any descriptive terms."
-        },
-        "limit": {
-          "type": "int",
-          "default": 10,
-          "constraints": "ge=1, le=100",
-          "description": "Maximum number of results to return (default: 10, max recommended: 100)"
-        }
-      },
-      "projection": {
-        "embedding": 0,
-        "images": 0,
-        "host": 0,
-        "neighborhood_overview": 0,
-        "space": 0,
-        "transit": 0,
-        "access": 0
-      },
-      "returns": "JSON with results array containing matching properties ranked by text relevance, each with a relevance score indicating how well it matches the search terms."
-    },
+    },    
     "get_unique_values": {
       "description": "Get unique values for a specific field in the MongoDB collection. This tool retrieves all unique values for a specified field to determine what filter options are available when using vector_search. Use the get_collection_info tool to see what fields are available in the collection, then use this tool to see what values exist for those filters.",
       "required": [

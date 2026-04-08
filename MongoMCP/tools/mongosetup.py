@@ -9,7 +9,53 @@ import hmac
 import json
 import os
 import uuid
+import sys
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from mongomcp.mongodb_client import MongoDBClient
+
+
+AIR_BNB_VECTOR_SEARCH_INDEX_CONFIG = {	
+  "fields": [
+    {
+      "type": "vector",
+      "path": "embedding",
+      "numDimensions": 1024,
+      "similarity": "cosine"
+    },
+    {
+      "path": "address.country_code",
+      "type": "filter"
+    },
+    {
+      "path": "address.market",
+      "type": "filter"
+    },
+    {
+      "path": "beds",
+      "type": "filter"
+    },
+    {
+      "path": "bedrooms",
+      "type": "filter"
+    },
+    {
+      "path": "address.suburb",
+      "type": "filter"
+    },
+    {
+      "path": "property_type",
+      "type": "filter"
+    }
+  ]
+}
+
+AIR_BNB_DB_NAME = "sample_airbnb"
+AIR_BNB_COLLECTION_NAME = "listingsAndReviews"
+AIR_BNB_VECTOR_SEARCH_INDEX_NAME = "listing_vector_index"
+
 
 
 def _load_settings(use_aws: bool):
@@ -115,6 +161,33 @@ def load_and_insert_mcp_tools(settings, mongo_client: MongoDBClient) -> None:
 	print(f"mcp_tools sync complete. inserted={inserted}, updated={updated}, total={len(tool_docs)}")
 
 
+def create_airbnb_vector_search_index(mongo_client: MongoDBClient) -> None:
+	"""Create the Airbnb vector search index if it does not already exist."""
+	collection = mongo_client.client[AIR_BNB_DB_NAME][AIR_BNB_COLLECTION_NAME]
+
+	existing_indexes = {
+		index_doc.get("name")
+		for index_doc in collection.list_search_indexes()
+		if index_doc.get("name")
+	}
+
+	if AIR_BNB_VECTOR_SEARCH_INDEX_NAME in existing_indexes:
+		print(
+			f"Vector search index already exists: "
+			f"{AIR_BNB_DB_NAME}.{AIR_BNB_COLLECTION_NAME}.{AIR_BNB_VECTOR_SEARCH_INDEX_NAME}"
+		)
+		return
+
+	collection.create_search_index(
+		name=AIR_BNB_VECTOR_SEARCH_INDEX_NAME,
+		definition=AIR_BNB_VECTOR_SEARCH_INDEX_CONFIG,
+	)
+	print(
+		f"Created vector search index: "
+		f"{AIR_BNB_DB_NAME}.{AIR_BNB_COLLECTION_NAME}.{AIR_BNB_VECTOR_SEARCH_INDEX_NAME}"
+	)
+
+
 def create_and_insert_agent_identity(
 	settings,
 	mongo_client: MongoDBClient,
@@ -167,6 +240,7 @@ def run_setup(
 	mongo_client = MongoDBClient(settings=settings)
 	mongo_client.sync_connect_to_mongodb()
 	load_and_insert_mcp_tools(settings, mongo_client)
+	create_airbnb_vector_search_index(mongo_client)
 	if seed_agent_identity:
 		create_and_insert_agent_identity(
 			settings=settings,

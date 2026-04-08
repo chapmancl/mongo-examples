@@ -450,7 +450,7 @@ async def http_get_tools_config(token: Annotated[str, Depends(get_token)]) -> Di
 @app.get(f"/{settings.TOOL_NAME}/collection_info")
 async def http_get_collection_info(token: Annotated[str, Depends(get_token)]) -> Dict[str, Any]:
     """Regular HTTP GET endpoint for collection info"""        
-    results = await get_collection_info.fn()
+    results = await get_collection_info()
     return {"collection_info": results}
 
 
