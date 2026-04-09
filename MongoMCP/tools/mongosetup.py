@@ -14,13 +14,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import jwt
 from mongomcp.mongodb_client import MongoDBClient
+from pymongo.operations import SearchIndexModel
 
 
 AIR_BNB_VECTOR_SEARCH_INDEX_CONFIG = {	
   "fields": [
     {
       "type": "vector",
-      "path": "embedding",
+      "path": "voyage_embedding", # "embedding",
       "numDimensions": 1024,
       "similarity": "cosine"
     },
@@ -53,7 +54,7 @@ AIR_BNB_VECTOR_SEARCH_INDEX_CONFIG = {
 
 AIR_BNB_DB_NAME = "sample_airbnb"
 AIR_BNB_COLLECTION_NAME = "listingsAndReviews"
-AIR_BNB_VECTOR_SEARCH_INDEX_NAME = "listing_vector_index"
+AIR_BNB_VECTOR_SEARCH_INDEX_NAME = "listing_voyage_index" # "listing_vector_index" # 
 
 
 
@@ -163,10 +164,15 @@ def create_airbnb_vector_search_index(mongo_client: MongoDBClient) -> None:
 		)
 		return
 
-	collection.create_search_index(
+	search_index_model = SearchIndexModel(
+		definition={
+			"fields": AIR_BNB_VECTOR_SEARCH_INDEX_CONFIG["fields"]
+		},
 		name=AIR_BNB_VECTOR_SEARCH_INDEX_NAME,
-		definition=AIR_BNB_VECTOR_SEARCH_INDEX_CONFIG,
-	)
+		type="vectorSearch",
+	)	
+	collection.create_search_index(model=search_index_model)
+
 	print(
 		f"Created vector search index: "
 		f"{AIR_BNB_DB_NAME}.{AIR_BNB_COLLECTION_NAME}.{AIR_BNB_VECTOR_SEARCH_INDEX_NAME}"
