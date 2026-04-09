@@ -283,13 +283,12 @@ async def get_collection_info() -> Dict[str, Any]:
 
 @mcp.tool()
 async def aggregate_query(
+    collection: Annotated[str, Field(description="Name of the MongoDB collection to search in.")],
     pipeline: Annotated[List[Dict[str, Any]], Field(description="MongoDB aggregation pipeline as a list of stage objects.")],
-    collection: Annotated[Optional[str], Field(default=None, description="Name of the MongoDB collection to run the pipeline against. Defaults to the configured collection.")] = None,
     limit: Annotated[Optional[int], Field(default=None, description="Optional limit to apply to the results.", ge=1, le=1000)] = None
 ) -> Dict[str, Any]:
     """Dynamic docstring loaded from JSON configuration"""
     try:
-        resolved_collection = collection or mongo_server._collection_name
         # Validate pipeline parameter
         if not pipeline or not isinstance(pipeline, list):
             return {"error":"pipeline must be a non-empty list of aggregation stages"}
@@ -310,7 +309,7 @@ async def aggregate_query(
                 final_pipeline.append({"$limit": limit})
         
         # Execute the aggregation pipeline
-        results = await mongo_server.agg_pipeline(resolved_collection, final_pipeline)
+        results = await mongo_server.agg_pipeline(collection, final_pipeline)
         jobj = json.dumps(results,default=str)
         logger.info(f"Aggregation query returned {len(results)} results")
         
