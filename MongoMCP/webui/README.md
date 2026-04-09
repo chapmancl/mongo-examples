@@ -57,7 +57,7 @@ npm run build
 Start the MCP server from the repository root:
 
 ```bash
-fastmcp run mongo_mcp.py --transport http --port 8000
+fastmcp run mongo_mcp.py --port 8000
 ```
 
 Then, from `webui`:
@@ -97,6 +97,12 @@ Build and run from repository root:
 ```bash
 docker build -t mcp-webui ./webui
 docker run --rm -p 8001:8001 mcp-webui
+```
+
+OR with docker compose
+
+```bash
+docker compose up --build
 ```
 
 ## Pattern Cache (AI Tool Routing)

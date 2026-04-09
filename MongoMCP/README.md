@@ -47,6 +47,7 @@ self.AUTH_TOKEN = "paste_the_AUTH_TOKEN_value_here"
 ```
 
 Run the setup scripts below after setting credentials. You will see an output line in this format:
+See [MongoDB database setup](#mongodb-database-setup) for details on the database setup.
 
 ```bash
 AUTH_TOKEN = "..."
@@ -72,7 +73,7 @@ python tools/mongosetup.py
 python tools/embedairbnb.py
 
 # 5. Run the MCP server
-fastapi run mongo_mcp.py --transport http --port 8000
+fastapi run mongo_mcp.py --port 8000
 
 # 6. In a separate terminal install the webui
 pip install -e "./mongomcp[agent]"
@@ -88,16 +89,12 @@ cd ../
 python app.py
 ```
 
-## Local Setup Without Containers
 
-Running the project directly is the default local workflow.
-
+## MongoDB database setup
 
 ```bash
 python tools/mongosetup.py
 ```
-
-This script uses local settings by default and will:
 
 - create the `mcp_config` database if it does not exist
 - create the `agent_identities`, `mcp_cache`, and `mcp_tools` collections
@@ -107,18 +104,6 @@ This script uses local settings by default and will:
 - upsert the generated metadata into `mcp_config.agent_identities`
 - print the `AUTH_TOKEN = "..."` line for local settings updates
 
-Then run the services directly:
-
-```bash
-fastmcp run mongo_mcp.py --transport http --port 8000
-```
-
-In a second terminal:
-
-```bash
-cd webui
-python app.py
-```
 
 ## Environment Variables
 
@@ -237,32 +222,6 @@ The MCP server loads its tool definitions from a MongoDB collection at startup. 
 
 See `tools/mcp_config.mcp_tools.json` for the local bootstrap configuration source. The `MCP_TOOL_NAME` environment variable selects which document to load.
 
-### Configuration document structure
-
-```json
-{
-    "Name": "AirbnbSearch",
-    "module_info": {
-        "title": "Airbnb Listings Search",
-        "description": "Vector and text search over Airbnb listing data.",
-        "database": "sample_airbnb",
-        "collection": "listingsAndReviews"
-    },
-    "tools": {
-        "vector_search": {
-            "description": "Semantic similarity search using AI embeddings.",
-            "index": "listing_vector_index",
-            "required": ["query_text"],
-            "parameters": {
-                "query_text": { "type": "str", "description": "Natural language query." },
-                "limit":      { "type": "int", "default": 10, "constraints": "ge=1, le=50" }
-            },
-            "projection": { "embedding": 0 }
-        }
-    }
-}
-```
-
 ### Available tool types
 
 | Tool | Description |
@@ -272,10 +231,11 @@ See `tools/mcp_config.mcp_tools.json` for the local bootstrap configuration sour
 | `get_unique_values` | Discover distinct values for any field |
 | `agg_pipeline` | Execute arbitrary aggregation pipelines |
 | `get_collection_info` | Collection metadata, indexes, and schema |
+| `geospatial_search` | Geo near queries against geospatial points |
 
 ---
 
-## MongoDB Secrets Manager Secret
+## MongoDB Secrets Manager Secret 
 
 The `MONGO_CREDS` secret should contain:
 
@@ -294,10 +254,10 @@ The `MONGO_CREDS` secret should contain:
 To connect a local IDE MCP client to the running server, start it with SSE transport:
 
 ```bash
-fastmcp run mongo_mcp.py --transport sse --port 8001
+fastmcp run mongo_mcp.py --port 8000
 ```
 
-Then point your client at `http://localhost:8001/sse`.
+Then point your client at `http://localhost:8000/sse`.
 
 ---
 
@@ -307,4 +267,5 @@ Then point your client at `http://localhost:8001/sse`.
 - **Tool discovery empty**: check `MCP_TOOL_NAME` matches a document `Name` field in your config collection
 - **Vector dimension mismatch**: embedding dimensions in your index must match the model output (`amazon.titan-embed-text-v2:0` → 1024)
 - **Container can't reach MCP server**: when running WebUI container locally, set `MONGO_MCP_ROOT=http://host.docker.internal:8000`
+- **Any error with an IP address**: connection to MongoDB is not working. check network, or credentials.
 
