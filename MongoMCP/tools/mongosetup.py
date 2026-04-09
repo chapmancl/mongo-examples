@@ -21,7 +21,7 @@ AIR_BNB_VECTOR_SEARCH_INDEX_CONFIG = {
   "fields": [
     {
       "type": "vector",
-      "path": "voyage_embedding", # "embedding",
+      "path": "embedding", # "voyage_embedding", # 
       "numDimensions": 1024,
       "similarity": "cosine"
     },
@@ -54,15 +54,15 @@ AIR_BNB_VECTOR_SEARCH_INDEX_CONFIG = {
 
 AIR_BNB_DB_NAME = "sample_airbnb"
 AIR_BNB_COLLECTION_NAME = "listingsAndReviews"
-AIR_BNB_VECTOR_SEARCH_INDEX_NAME = "listing_voyage_index" # "listing_vector_index" # 
+AIR_BNB_VECTOR_SEARCH_INDEX_NAME = "listing_vector_index" # "listing_voyage_index" # 
 
 
 
 def _load_settings(use_aws: bool):
 	if use_aws:
-		from AWS_settings import settings  # pylint: disable=import-outside-toplevel
+		from AWS_settings import settings  
 	else:
-		from local_settings import settings  # pylint: disable=import-outside-toplevel
+		from local_settings import settings  
 	return settings
 
 
