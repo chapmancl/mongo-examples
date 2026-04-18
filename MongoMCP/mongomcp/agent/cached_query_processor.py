@@ -1,3 +1,4 @@
+import copy
 import json
 import traceback
 from typing import Dict, Any, Optional
@@ -7,9 +8,13 @@ import asyncio
 import mcp.types as mt
 from .webui_bedrock_client import WebUiBedrockClient
 from .tool_router import ToolRouter
+
 from ..mongo_cache import MongoSessionCache
+from ..mongodb_client import MongoDBClient
+from ..memory import build_memory_dispatch, get_memory_bedrock_toolspecs
 import logging
 logging.basicConfig(level=logging.INFO)
+logging.getLogger("urllib3").setLevel(logging.WARNING) # don't log every API call
 logger = logging.getLogger(__name__)
 
 import fastmcp
@@ -24,7 +29,7 @@ class CachedQueryProcessor:
     4. Conversation history caching
     """
 
-    _CACHE_VERSION = "v3"  # Bump when tool discovery cache schema changes to auto-invalidate stale entries
+    _CACHE_VERSION = "v5"  # Bump when tool discovery cache schema changes to auto-invalidate stale entries
 
     def __init__(self, settings, message_handler: Optional[callable] = None):
         """Initializes the CachedQueryProcessor with caching configuration"""
@@ -41,12 +46,14 @@ class CachedQueryProcessor:
         self.mcp_tools_config = None
         self.mcp_endpoints = None
         self.mongo_collection_info = {}
+        self._agent_prompts: Dict[str, str] = {}
         self.tool_router: Optional[ToolRouter] = None
         self._system_prompt = []
         self._headers = {
             'Authorization': f'Bearer {settings.AUTH_TOKEN}',
             'Content-Type': 'application/json' 
-        }        
+        }    
+            
         self._tool_discovery_cache = MongoSessionCache(
             username="default_user",
             session_id="default_session",
@@ -64,9 +71,35 @@ class CachedQueryProcessor:
         self.enable_mcp_tool_caching = getattr(settings, "ENABLE_MCP_TOOL_CACHING", False)
         self.enable_response_caching = getattr(settings, "ENABLE_RESPONSE_CACHING", True)
         self.enable_ai_tool_routing = getattr(settings, "AI_TOOL_ROUTING", False)
+        self.enable_tool_routing = getattr(settings, "TOOL_ROUTING", True)
+
+        # Token budget controls for history management.
+        self.max_context_tokens = int(getattr(settings, "LLM_MAX_CONTEXT_TOKENS", 200000))
+        self.token_warning_ratio = float(getattr(settings, "LLM_TOKEN_WARNING_RATIO", 0.80))
+        self.reserved_tokens = int(getattr(settings, "LLM_RESERVED_TOKENS", 20000))
+        self.history_token_limit = max(1000, self.max_context_tokens - self.reserved_tokens)
+        self.token_warning_threshold = int(self.max_context_tokens * self.token_warning_ratio)
+        self._last_usage: Dict[str, int] = {}
+
+        # Memory layer — always available regardless of MCP endpoint configuration.
+        # Build a MongoDBClient and dispatch table for direct (non-HTTP) memory calls.
+        self._memory_db_client = MongoDBClient(settings=settings)
+        # llm_client is used for embedding; assigned after WebUiBedrockClient construction above.
+        self._memory_fns: Dict[str, Any] = {}  # populated in generate_toolconfig after llm_client ready
+        self._memory_toolspecs = get_memory_bedrock_toolspecs()
 
         self.generate_toolconfig()
-    
+
+    @staticmethod
+    def _normalize_agent_prompt(value: Any) -> str:
+        """Return cleaned agent prompt text, or empty string when not meaningful."""
+        if not isinstance(value, str):
+            return ""
+        cleaned = value.strip()
+        if cleaned.lower() in {"", "null", "none", "{}", "[]"}:
+            return ""
+        return cleaned
+
     def set_show_response_progress(self, show: bool):
         """Control whether to show LLM response progress updates"""
         self.llm_client.show_response_progress = show
@@ -89,11 +122,21 @@ class CachedQueryProcessor:
         self.mcp_endpoint_configs = {}
         self.mcp_client = None
         self.mcp_tools_config = None
+        self._agent_prompts = {}
         self.generate_toolconfig()
         self.message_handler("All caches cleared", status="Cache Cleared")
 
     async def _execute_mcp_tool_cached_async(self, tool_name: str, tool_input: dict) -> str:
         """Async MCP tool execution with cache support for BedrockClient tool callbacks."""
+
+        # Memory tools are dispatched directly — no HTTP, no cache, always fresh.
+        if ToolRouter._is_memory_tool(tool_name) and tool_name in self._memory_fns:
+            try:
+                result = await self._memory_fns[tool_name](**tool_input)
+                return json.dumps(result, default=str)
+            except Exception as exc:
+                logger.error("Memory tool %s failed: %s", tool_name, exc)
+                return json.dumps({"error": str(exc)})
         
         # Fast path: intercept and serve collection info from in-memory cache instead of calling MCP.
         # this cache was built from API calls during setup so we're avoiding heavy common calls 
@@ -107,7 +150,7 @@ class CachedQueryProcessor:
         else:
             endpoint_key = None
 
-        if endpoint_key is not None and endpoint_key in self.mongo_collection_info:
+        if self.enable_mcp_tool_caching and endpoint_key is not None and endpoint_key in self.mongo_collection_info:
             self.message_handler(f"Using cached collection info for {endpoint_key}", status="Tool Cache")
             return json.dumps(self.mongo_collection_info.get(endpoint_key, {}), default=str)
 
@@ -168,10 +211,12 @@ class CachedQueryProcessor:
         results = await asyncio.gather(*[
             self._fetch_endpoint_data(name, root_frmt) for name in self.mcp_endpoints
         ])
-        for name, config, tools, collection_info in results:
+        for name, config, tools, collection_info, agent_prompt in results:
             self.mcp_endpoint_configs[name] = config
             bedrock_tools.extend(tools)
             self.mongo_collection_info[name] = collection_info
+            if agent_prompt:
+                self._agent_prompts[name] = self._normalize_agent_prompt(agent_prompt)
 
         if self.mcp_endpoint_configs:
             self.mcp_client = fastmcp.Client({"mcpServers": self.mcp_endpoint_configs})
@@ -185,6 +230,7 @@ class CachedQueryProcessor:
                 "endpoints": self.mcp_endpoints,
                 "endpoint_configs": self.mcp_endpoint_configs,
                 "collection_info": self.mongo_collection_info,
+                "agent_prompts": self._agent_prompts,
                 "tools": bedrock_tools,
             })
 
@@ -197,6 +243,7 @@ class CachedQueryProcessor:
         }
 
         tools = []
+        agent_prompt = ""
         try:
             # spin up a thread for each endpoint call since requests is blocking and we want concurrency here, 
             # especially if there are many endpoints or slow responses. FastMCP sessions require async context and was slow 
@@ -205,7 +252,9 @@ class CachedQueryProcessor:
                 requests.get, f"{self.settings.mongo_mcp_root}/{name}/llm_tools", headers=self._headers
             )
             resp.raise_for_status()
-            tools = resp.json().get("tools", [])
+            payload = resp.json()
+            agent_prompt = payload.get("agent_prompt", "") if isinstance(payload, dict) else ""
+            tools = payload.get("tools", []) if isinstance(payload, dict) else []
             for tool in tools:
                 if "toolSpec" in tool and "name" in tool["toolSpec"]:
                     tool["toolSpec"]["name"] = f"{name}_{tool['toolSpec']['name']}"
@@ -219,35 +268,80 @@ class CachedQueryProcessor:
                 requests.get, f"{self.settings.mongo_mcp_root}/{name}/collection_info", headers=self._headers
             )
             resp.raise_for_status()
-            collection_info = resp.json().get("collection_info", {})
+            payload = resp.json()
+            # Support both API shapes:
+            # 1) {"collection_info": ...}
+            # 2) direct list/dict payload
+            collection_info = payload.get("collection_info", {}) if isinstance(payload, dict) else payload
         except Exception as e:
             self.message_handler(f"Error fetching collection info for {name}: {e}", status="Error")
 
-        return name, config, tools, collection_info
+        return name, config, tools, collection_info, agent_prompt
 
     def _apply_cached_state(self, cached: dict) -> None:
         """Restore full instance state — endpoints, tools, and LLM client — from a cached discovery payload."""
         self.mcp_endpoints = cached.get("endpoints", [])
         self.mcp_endpoint_configs = cached.get("endpoint_configs", {})
         self.mongo_collection_info = cached.get("collection_info", {})
+        self._agent_prompts = cached.get("agent_prompts", {})
         self.mcp_client = fastmcp.Client({"mcpServers": self.mcp_endpoint_configs}) if self.mcp_endpoint_configs else None
         self._configure_llm_client(cached.get("tools", []))
 
     def _configure_llm_client(self, bedrock_tools: list) -> None:
         """Set the system prompt, register tools on the LLM client, and initialize the ToolRouter."""
+        # Build memory dispatch table now that llm_client is ready (needs embedding capability).
+        if not self._memory_fns:
+            try:
+                self._memory_fns = build_memory_dispatch(
+                    db_client=self._memory_db_client,
+                    llm_client=self.llm_client,
+                    settings=self.settings,
+                )
+                logger.info("Memory dispatch table built (%d tools)", len(self._memory_fns))
+            except Exception as exc:
+                logger.warning("Failed to build memory dispatch table: %s", exc)
+
+        # Always include memory toolspecs — deduplicate by name so we don't double-add
+        # if the memory endpoint also appears in the HTTP-discovered catalog.
+        existing_names = {t["toolSpec"]["name"] for t in bedrock_tools if "toolSpec" in t}
+        memory_additions = [
+            spec for spec in self._memory_toolspecs
+            if spec["toolSpec"]["name"] not in existing_names
+        ]
+        all_tools = bedrock_tools + memory_additions
+        if memory_additions:
+            logger.info("Injected %d memory toolspecs into tool catalog", len(memory_additions))
+
         self._system_prompt = [
             {"text": t}
             for t in getattr(self.settings, "BEDROCK_SYSTEM_PROMPT_TEXTS", [])
         ]
-        self._system_prompt.append({"text": json.dumps(self.mongo_collection_info)})
+        print("System prompt:", self._system_prompt)
+        for endpoint_name, agent_prompt in self._agent_prompts.items():
+            cleaned = self._normalize_agent_prompt(agent_prompt)
+            if cleaned:
+                self._system_prompt.append({"text": f"***IMPORTANT {endpoint_name}:{cleaned}"})
+
+        # Avoid injecting empty per-endpoint collection info blocks like {"endpoint": {}}.
+        non_empty_collection_info = {}
+        for endpoint_name, info in (self.mongo_collection_info or {}).items():
+            if info is None:
+                continue
+            if isinstance(info, (dict, list, str, tuple, set)) and len(info) == 0:
+                continue
+            non_empty_collection_info[endpoint_name] = info
+
+        if non_empty_collection_info:
+            self._system_prompt.append({"text": json.dumps(non_empty_collection_info)})
         self.llm_client.system = self._system_prompt
-        self.mcp_tools_config = bedrock_tools
+        self.mcp_tools_config = all_tools
         self.llm_client.configure_tools(self.mcp_tools_config, self._execute_mcp_tool_cached_async)
         self.tool_router = ToolRouter(
-            tool_catalog=bedrock_tools,
+            tool_catalog=all_tools,
             llm_client=self.llm_client,
             message_handler=self.message_handler,
             settings=self.settings,
+            memory_fns=self._memory_fns,
         )
 
 
@@ -331,21 +425,159 @@ class CachedQueryProcessor:
             raise
  
     def _trim_history(self, history: list) -> list:
-        """Keep only the most recent LLM_MAX_HISTORY messages.
-        Always trims to a user-role message at the start so Bedrock
-        doesn't reject the conversation.
+        """Trim history by message count and token budget.
+
+        Keeps conversation start aligned to a user message so Bedrock
+        ordering rules are satisfied.
         """
         max_msgs = getattr(self.settings, 'LLM_MAX_HISTORY', 20)
-        if len(history) <= max_msgs:
-            return history
-        trimmed = history[-max_msgs:]
-        # Advance to first user message to satisfy Converse API ordering rules
-        for i, msg in enumerate(trimmed):
-            if msg.get("role") == "user":
-                return trimmed[i:]
+        turns = self._history_to_turns(history)
+
+        if not turns:
+            return []
+
+        # First respect max message count, but only by removing whole turns.
+        while len(self._flatten_turns(turns)) > max_msgs and len(turns) > 1:
+            turns = turns[1:]
+
+        trimmed = self._flatten_turns(turns)
+        trimmed = self._align_history_to_user(trimmed)
+
+        # Token-aware trimming: remove oldest whole turns until under budget.
+        while len(turns) > 1 and self._estimate_history_tokens(trimmed) > self.history_token_limit:
+            turns = turns[1:]
+            trimmed = self._align_history_to_user(self._flatten_turns(turns))
+
+        # Final sanity pass: if the suffix is still structurally invalid, drop oldest
+        # turns until all toolUse/toolResult pairs are balanced.
+        while len(turns) > 1 and not self._history_has_balanced_tool_calls(trimmed):
+            turns = turns[1:]
+            trimmed = self._align_history_to_user(self._flatten_turns(turns))
+
+        if not self._history_has_balanced_tool_calls(trimmed):
+            logger.warning("History remained structurally invalid after trimming; clearing retained history.")
+            return []
+
         return trimmed
 
-    def query_with_mcp_tools(self, question: str, history: Optional[list] = None) -> tuple:
+    @staticmethod
+    def _is_tool_result_message(msg: dict) -> bool:
+        content = msg.get("content", [])
+        return bool(
+            msg.get("role") == "user"
+            and isinstance(content, list)
+            and content
+            and all(isinstance(block, dict) and "toolResult" in block for block in content)
+        )
+
+    def _history_to_turns(self, history: list) -> list:
+        """Group history into user-initiated turns so trimming preserves tool cycles."""
+        turns = []
+        current_turn = []
+
+        for msg in history:
+            starts_new_turn = (
+                msg.get("role") == "user"
+                and not self._is_tool_result_message(msg)
+            )
+            if starts_new_turn and current_turn:
+                turns.append(current_turn)
+                current_turn = [msg]
+            else:
+                current_turn.append(msg)
+
+        if current_turn:
+            turns.append(current_turn)
+
+        return turns
+
+    @staticmethod
+    def _flatten_turns(turns: list) -> list:
+        flattened = []
+        for turn in turns:
+            flattened.extend(turn)
+        return flattened
+
+    @staticmethod
+    def _align_history_to_user(history: list) -> list:
+        for i, msg in enumerate(history):
+            if msg.get("role") == "user":
+                return history[i:]
+        return history
+
+    @staticmethod
+    def _estimate_text_tokens(text: Any) -> int:
+        if not text:
+            return 0
+        if not isinstance(text, str):
+            text = str(text)
+        # Rough heuristic for Bedrock token accounting.
+        return max(1, len(text) // 4)
+
+    def _estimate_history_tokens(self, history: list) -> int:
+        total = 0
+        for msg in history:
+            total += 6  # per-message structural overhead
+            content = msg.get("content", [])
+            if not isinstance(content, list):
+                total += self._estimate_text_tokens(content)
+                continue
+            for block in content:
+                if not isinstance(block, dict):
+                    total += self._estimate_text_tokens(block)
+                    continue
+                if "text" in block:
+                    total += self._estimate_text_tokens(block.get("text", ""))
+                elif "toolUse" in block:
+                    total += self._estimate_text_tokens(json.dumps(block.get("toolUse", {}), default=str))
+                elif "toolResult" in block:
+                    total += self._estimate_text_tokens(json.dumps(block.get("toolResult", {}), default=str))
+                else:
+                    total += self._estimate_text_tokens(json.dumps(block, default=str))
+        return total
+
+    def _history_has_balanced_tool_calls(self, history: list) -> bool:
+        """Return True when every retained toolUse has a matching retained toolResult."""
+        pending_tool_use_ids = []
+
+        for msg in history:
+            content = msg.get("content", [])
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                tool_use = block.get("toolUse")
+                if isinstance(tool_use, dict):
+                    tool_use_id = tool_use.get("toolUseId")
+                    if tool_use_id:
+                        pending_tool_use_ids.append(tool_use_id)
+                tool_result = block.get("toolResult")
+                if isinstance(tool_result, dict):
+                    tool_use_id = tool_result.get("toolUseId")
+                    if tool_use_id in pending_tool_use_ids:
+                        pending_tool_use_ids.remove(tool_use_id)
+
+        return not pending_tool_use_ids
+
+    def _maybe_inject_token_warning(self, user_block: list, question: str) -> None:
+        """Inject a user-context warning when history is nearing token limits."""
+        history_tokens = self._estimate_history_tokens(self.history or [])
+        latest_input_tokens = int((self._last_usage or {}).get("inputTokens", 0) or 0)
+        pressure_tokens = max(history_tokens + self._estimate_text_tokens(question), latest_input_tokens)
+        if pressure_tokens < self.token_warning_threshold:
+            return
+
+        ratio = int((pressure_tokens / max(1, self.max_context_tokens)) * 100)
+        warning_text = (
+            "[Context Warning] Conversation context is nearing token capacity "
+            f"(~{ratio}% of {self.max_context_tokens}). "
+            "Before continuing, briefly summarize durable memory and reflect on memeory management strategies."
+            "because older history may be trimmed soon."
+        )
+        user_block.append({"text": f"\n\n{warning_text}"})
+
+    def query_with_mcp_tools(self, question: str, history: Optional[list] = None, user_id: Optional[str] = None, session_id: Optional[str] = None, use_llm_routing: bool = False) -> tuple:
         """
         Query LLM with MCP tool support using Bedrock's Converse API with caching.
         This flow is very complex because there are a lot of json formatting paths
@@ -369,37 +601,83 @@ class CachedQueryProcessor:
           4. Return (answer, jsondata, history)
 
         Returns:
-            tuple: (answer: str, jsondata: dict|None, history: list)
+            tuple: (answer: str, jsondata: dict|None, history: list, clear_history: bool)
+                - answer: LLM response text
+                - jsondata: structured JSON data extracted from the response, or None
+                - history: updated conversation history
+                - clear_history: True if the conversation history was corrupt and has been cleared;
+                  callers should discard any client-side history and prompt the user to retry
         """
         if history:
             self.history = history
         if self.history is None:
             self.history = []
 
+        # Scope the tool-response cache to this user so each browser user gets
+        # independent cached results.  Fallback to "default_user" when no user_id
+        # is provided (e.g. non-browser callers).
+        if user_id:
+            self._tool_response_cache.username = user_id
+            self._tool_response_cache.session_id = "tool_response"
+
         self.history = self._trim_history(self.history)
         self.generate_toolconfig()
 
         messages = self.history
         messages.append({"role": "user", "content": [{"text": question}]})
+        self._maybe_inject_token_warning(messages[-1]["content"], question)
         self.llm_client.message_handler = self.message_handler
 
         async def _invoke(msgs):
-            if self.enable_ai_tool_routing and self.tool_router is not None:
-                try:
-                    tools_for_question, hint_text = await self.tool_router.route_for_question(question)
-                    if tools_for_question:
-                        logger.info(f"Tools selected: {[t['toolSpec']['name'] for t in tools_for_question]}")
-                        self.llm_client.configure_tools(tools_for_question, self._execute_mcp_tool_cached_async)
-                    if hint_text:
-                        # Append the playbook / output-format hint to the user message
-                        user_block = msgs[-1]["content"]
-                        user_block.append({"text": f"\n\n{hint_text}"})
-                        logger.info("Injected playbook hint into user message")
-                except Exception as e:
-                    traceback.print_exc()
-                    logger.warning(f"Tool routing failed, falling back to full tool set: {e}")
+            tools_for_question, hint_text = [], None
+            was_cache_hit = False
+            llm_routing_ran = False  # tracks whether LLM routing made an explicit decision
+
+            if not self.enable_tool_routing:
+                tools_for_question = self.mcp_tools_config or []
+                self.llm_client.configure_tools(tools_for_question, self._execute_mcp_tool_cached_async)
+                logger.info(f"[TOOL SELECTION] method=full_catalog_tool_routing_disabled tools={[t['toolSpec']['name'] for t in tools_for_question]}")
+            else:
+                # Phase 1: pattern cache lookup — skipped when caller requests direct LLM routing
+                if self.tool_router is not None and not use_llm_routing:
+                    tools_for_question, hint_text = await self.tool_router.try_pattern_match(question)
+                    was_cache_hit = bool(tools_for_question)
+                    if was_cache_hit:
+                        logger.info(f"[TOOL SELECTION] method=pattern_cache tools={[t['toolSpec']['name'] for t in tools_for_question]}")
+                    else:
+                        logger.info("[TOOL SELECTION] method=pattern_cache result=MISS — no matching pattern found")
+                # Phase 2: LLM routing — on cache miss, or when server flag / caller forces it
+                if not tools_for_question and self.tool_router is not None and (self.enable_ai_tool_routing or use_llm_routing):
+                    try:
+                        tools_for_question, hint_text = await self.tool_router.route_via_llm(question)
+                        llm_routing_ran = True
+                        if tools_for_question:
+                            method = "llm_routing_forced" if use_llm_routing else "llm_routing_cache_miss"
+                            logger.info(f"[TOOL SELECTION] method={method} tools={[t['toolSpec']['name'] for t in tools_for_question]}")
+                        else:
+                            logger.info("[TOOL SELECTION] method=llm_routing result=no tools — LLM will answer directly without tools")
+                    except Exception as e:
+                        traceback.print_exc()
+                        logger.warning(f"Tool routing failed, falling back to full tool set: {e}")
+                if tools_for_question:
+                    self.llm_client.configure_tools(tools_for_question, self._execute_mcp_tool_cached_async)
+                elif llm_routing_ran:
+                    # LLM routing explicitly decided no tools are needed — honour that decision
+                    self.llm_client.configure_tools([], None)
+                    logger.info("[TOOL SELECTION] method=none — respecting LLM routing decision to answer directly")
+                else:
+                    logger.info(f"[TOOL SELECTION] method=full_catalog tools={[t['toolSpec']['name'] for t in (self.mcp_tools_config or [])]}")
+                if hint_text:
+                    # Append the playbook / output-format hint to the user message
+                    user_block = msgs[-1]["content"]
+                    user_block.append({"text": f"\n\n{hint_text}"})
+                    logger.info("Injected playbook hint into user message")
 
             self.llm_client.system = self._system_prompt
+
+            # Snapshot msgs before the LLM loop mutates it (appends assistant/tool messages).
+            # Needed for a potential retry with the full tool catalog.
+            msgs_snapshot = copy.deepcopy(msgs)
 
             # Reset Motor connections so they bind to this event loop.
             self._tool_response_cache.reset_connection()
@@ -407,7 +685,53 @@ class CachedQueryProcessor:
             # open/close their own sessions on each call, so we do NOT need the
             # top-level self.mcp_client context manager here.  Opening it would
             # create sessions to every endpoint and the close can hang.
-            return await self.llm_client.invoke_bedrock_with_tools_text(messages=msgs)
+            result = await self.llm_client.invoke_bedrock_with_tools_text(messages=msgs)
+
+            # If the pattern cache routed to the wrong tool and all tool results
+            # came back empty, retry using LLM routing so it can pick the right tool.
+            if was_cache_hit and self._tool_results_all_empty(result.get("history", [])):
+                self.message_handler(
+                    "Pattern cache hit yielded no data — retrying with LLM tool routing",
+                    status="Tool Routing",
+                )
+                logger.warning(
+                    "Cache-routed query returned empty tool results; "
+                    "falling back to LLM routing (cache pattern may be wrong)"
+                )
+                msgs.clear()
+                msgs.extend(msgs_snapshot)
+                # Use LLM routing to select the right tools for this retry
+                retry_tools, retry_hint = [], None
+                if self.tool_router is not None:
+                    try:
+                        retry_tools, retry_hint = await self.tool_router.route_via_llm(question)
+                    except Exception as e:
+                        logger.warning(f"LLM routing on retry failed, using full catalog: {e}")
+                if retry_tools:
+                    self.llm_client.configure_tools(retry_tools, self._execute_mcp_tool_cached_async)
+                    if retry_hint:
+                        msgs[-1]["content"].append({"text": f"\n\n{retry_hint}"})
+                else:
+                    self.llm_client.configure_tools(
+                        self.mcp_tools_config, self._execute_mcp_tool_cached_async
+                    )
+                self._tool_response_cache.reset_connection()
+                result = await self.llm_client.invoke_bedrock_with_tools_text(messages=msgs)
+
+            # Record a PII-free playbook for LLM-routed interactions (non-fatal).
+            # Only fires when LLM routing set a pattern; cache hits already have a playbook.
+            if self.tool_router is not None and self.tool_router._last_pattern and llm_routing_ran:
+                try:
+                    await self.tool_router.record_pattern(
+                        history=result.get("history", []),
+                        response_text=result.get("response_text", ""),
+                        jsondata=result.get("jsondata"),
+                        question=question,
+                    )
+                except Exception as _log_err:
+                    logger.warning("Pattern recording failed: %s", _log_err)
+
+            return result
 
         try:
             invoke_result = asyncio.run(_invoke(messages))
@@ -416,24 +740,77 @@ class CachedQueryProcessor:
             error_code = error.response['Error']['Code']
             print(f"Bedrock error: {error_code} - {error.response['Error']['Message']}")
             if error_code == 'ValidationException':
-                return "Error: Input validation failed", None, self.history
+                return "Error: Input validation failed", None, self.history, False
             if error_code in ['ExpiredTokenException', 'ExpiredToken']:
                 raise
-            return f"Error: {error.response['Error']['Message']}", None, self.history
+            return f"Error: {error.response['Error']['Message']}", None, self.history, False
         except Exception as e:
             print(f"Unexpected error invoking Bedrock: {e}")
-            return f"Error: {str(e)}", None, self.history
+            return f"Error: {str(e)}", None, self.history, False
+
+        # If Bedrock detected corrupt history (missing toolResult), clear it before returning.
+        if invoke_result.get("clear_history"):
+            self.history = []
+            logger.warning("History cleared due to corrupt toolResult state.")
+            return invoke_result.get("error", "Conversation history was corrupt and has been cleared. Please try again."), None, [], True
 
         self.history = invoke_result.get("history", messages)
+        self.history = self._trim_history(self.history)
         answer = invoke_result.get("response_text", "No response generated")
         jsondata = invoke_result.get("jsondata", None)
+        usage = invoke_result.get("usage_last") or invoke_result.get("usage") or {}
+        self._last_usage = usage if isinstance(usage, dict) else {}
+
+        if self._last_usage:
+            in_tokens = int(self._last_usage.get("inputTokens", 0) or 0)
+            out_tokens = int(self._last_usage.get("outputTokens", 0) or 0)
+            total_tokens = in_tokens + out_tokens
+            # Report context pressure from trimmed history so % aligns with trimming behavior.
+            history_tokens = self._estimate_history_tokens(self.history or [])
+            context_pressure_tokens = max(history_tokens, in_tokens)
+            percent_used = (context_pressure_tokens / max(1, self.max_context_tokens)) * 100
+            self.message_handler(
+                (
+                    f"Token usage - input: {in_tokens}, output: {out_tokens}, total: {total_tokens}, "
+                    f"context_estimate: {context_pressure_tokens}, used: {percent_used:.1f}%"
+                ),
+                status="Token Usage",
+            )
 
         # Stash last query state so save_pattern() can be triggered manually.
         self._last_question = question
         self._last_answer = answer
         self._last_jsondata = jsondata
 
-        return answer, jsondata, self.history
+        return answer, jsondata, self.history, False
+
+    @staticmethod
+    def _tool_results_all_empty(history: list) -> bool:
+        """Return True if at least one tool was called and every result was trivially empty.
+
+        Triggers the full-catalog retry when a cache-hit route selected the wrong tool.
+        Returns False (no retry) when no tool calls were made or any result has real data.
+        """
+        tool_results = []
+        for msg in history:
+            if msg.get("role") != "user":
+                continue
+            for block in msg.get("content", []):
+                if "toolResult" in block:
+                    tool_results.append(block["toolResult"])
+
+        if not tool_results:
+            return False  # No tool calls at all — LLM answered directly; don't retry
+
+        _EMPTY_LITERALS = {"[]", "{}", "null", "none", "\"[]\"", "\"{}\"", "[]\n", "{}\n"}
+        for tr in tool_results:
+            if tr.get("status") == "error":
+                continue  # errors count as non-empty for retry purposes
+            for item in tr.get("content", []):
+                text = item.get("text", "").strip()
+                if len(text) > 20 and text.lower() not in _EMPTY_LITERALS:
+                    return False  # At least one result has real data
+        return True  # All tool results were trivially empty
 
     def save_pattern(self) -> bool:
         """Persist the routing pattern from the last query into the pattern cache.

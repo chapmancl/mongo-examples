@@ -63,7 +63,9 @@
         "neighborhood_overview": 0,
         "space": 0,
         "transit": 0,
-        "access": 0
+        "access": 0,
+        "reviews":0,
+        "voyage_embedding": 0
       },
       "collection":"listingsAndReviews",
       "returns": "JSON with results array containing matching properties ranked by semantic similarity, each with a similarity score (0.0-1.0, higher is more similar)."

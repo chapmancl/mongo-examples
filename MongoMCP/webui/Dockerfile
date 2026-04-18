@@ -9,20 +9,18 @@ COPY frontend/ ./
 RUN npm run build
 
 
-FROM python:3.13-slim
-RUN apt-get update && apt-get install -y curl
+FROM mcp-base:latest
 WORKDIR /app
 
-ENV PYTHONUNBUFFERED=1
+# ── Dependency layer (cached until requirements files change) ──────────────────
+COPY --from=rootfolder ./mongomcp/ mongomcp/
+ARG CACHEBUST=1
+RUN pip install "./mongomcp[agent]"
 
-COPY requirements.txt requirements.txt
+# ── Application code ──────────────────────────────────────────────────────────
 COPY app.py app.py
 COPY mcp_processor.py mcp_processor.py
 COPY aws_settings.py aws_settings.py
-COPY --from=rootfolder ./mongomcp/ mongomcp/
-
-RUN pip install --no-cache-dir "./mongomcp[agent]"
-RUN pip install -r requirements.txt
 
 COPY --from=frontend-build /build/frontend/dist frontend/dist
 

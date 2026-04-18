@@ -3,18 +3,16 @@
 """Initialize MongoDB config database and required collections for MongoMCP."""
 
 import argparse
-import base64
 import json
 import os
-import uuid
 import sys
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import jwt
 from mongomcp.mongodb_client import MongoDBClient
 from pymongo.operations import SearchIndexModel
+from tools.generate_jwt_token import get_or_create_agent_identity_and_token
 
 
 AIR_BNB_VECTOR_SEARCH_INDEX_CONFIG = {	
@@ -57,6 +55,57 @@ AIR_BNB_COLLECTION_NAME = "listingsAndReviews"
 AIR_BNB_VECTOR_SEARCH_INDEX_NAME = "listing_vector_index" # "listing_voyage_index" # 
 
 
+# ---------------------------------------------------------------------------
+# Memory layer — index definitions (must match mongomcp/memory/memservice.py)
+# ---------------------------------------------------------------------------
+MEMORY_DB_NAME = "mcp_config"  # overridden by MEMORY_DB env var at runtime
+
+MEMORY_EPISODIC_VECTOR_INDEX_CONFIG = {
+	"fields": [
+		{"type": "vector", "path": "embedding", "numDimensions": 1024, "similarity": "dotProduct"},
+		{"type": "filter", "path": "agent_id"},
+		{"type": "filter", "path": "username"},
+		{"type": "filter", "path": "session_id"},
+		{"type": "filter", "path": "memory_type"},
+		{"type": "filter", "path": "tags"},
+		{"type": "filter", "path": "entities"},
+		{"type": "filter", "path": "importance"},
+		{"type": "filter", "path": "expires_at"},
+		{"type": "filter", "path": "is_isolated"},
+	]
+}
+
+MEMORY_SEMANTIC_VECTOR_INDEX_CONFIG = {
+	"fields": [
+		{"type": "vector", "path": "embedding", "numDimensions": 1024, "similarity": "dotProduct"},
+		{"type": "filter", "path": "agent_id"},
+		{"type": "filter", "path": "username"},
+		{"type": "filter", "path": "memory_type"},
+		{"type": "filter", "path": "tags"},
+		{"type": "filter", "path": "entities"},
+		{"type": "filter", "path": "session_id"},
+		{"type": "filter", "path": "is_isolated"},
+	]
+}
+
+# Atlas Search (BM25 fulltext) index for the $rankFusion text leg on memory_semantic.
+MEMORY_SEMANTIC_FULLTEXT_INDEX_CONFIG = {
+	"mappings": {
+		"dynamic": False,
+		"fields": {
+			"content":      {"type": "string"},
+			"tags":         {"type": "string"},
+			"memory_type":  {"type": "string"},
+		}
+	}
+}
+MEMORY_SEMANTIC_FULLTEXT_INDEX_NAME = "memory_semantic_fulltext_index"
+
+MEMORY_COLLECTIONS = ["memory_episodic", "memory_semantic"]
+
+MEMORY_EPISODIC_VECTOR_INDEX_NAME = "memory_episodic_vector_index"
+MEMORY_SEMANTIC_VECTOR_INDEX_NAME = "memory_semantic_vector_index"
+
 
 def _load_settings(use_aws: bool):
 	if use_aws:
@@ -75,28 +124,6 @@ def _get_settings_mongo_url(settings) -> str:
 	raise ValueError("Could not resolve mongo URL from settings.mongo_url")
 
 
-def _parse_scope(value: str) -> list[str]:
-	if not value:
-		return ["read", "write", "llm:invoke"]
-	return [item.strip() for item in value.split(",") if item.strip()]
-
-
-def _generate_jwt(agent_name: str, agent_key: str, pvk: str) -> str:
-	"""Generate JWT using PyJWT library with HS256 algorithm."""
-	header = {
-		"alg": "HS256",
-		"api_key": agent_key,
-		"typ": "JWT",
-	}
-	payload = {
-		"agent_name": agent_name,
-	}
-	
-	# PyJWT handles the secret as a string (standard base64)
-	token = jwt.encode(payload, pvk, algorithm="HS256", headers=header)
-	return token
-
-
 def create_mcp_config_collections(settings) -> None:
 	"""Create mcp_config database collections if they do not already exist."""
 	settings.mcp_config_db = "mcp_config"
@@ -106,7 +133,7 @@ def create_mcp_config_collections(settings) -> None:
 	mongo_client.sync_connect_to_mongodb()
 
 	db = mongo_client.db
-	required_collections = ["agent_identities", "mcp_cache", "mcp_tools", "mcp_patterns", "llm_history"]
+	required_collections = ["agent_identities", "mcp_cache", "mcp_tools", "mcp_patterns", "llm_history"] + MEMORY_COLLECTIONS
 	existing_collections = set(db.list_collection_names())
 
 	print("Connected to database: mcp_config")
@@ -179,6 +206,51 @@ def create_airbnb_vector_search_index(mongo_client: MongoDBClient) -> None:
 	)
 
 
+def create_memory_vector_search_indexes(mongo_client: MongoDBClient) -> None:
+	"""Create memory vector search indexes if they do not already exist."""
+	targets = [
+		("memory_episodic",  MEMORY_EPISODIC_VECTOR_INDEX_NAME,  MEMORY_EPISODIC_VECTOR_INDEX_CONFIG),
+		("memory_semantic",  MEMORY_SEMANTIC_VECTOR_INDEX_NAME,  MEMORY_SEMANTIC_VECTOR_INDEX_CONFIG),
+	]
+	for collection_name, index_name, index_config in targets:
+		collection = mongo_client.client[MEMORY_DB_NAME][collection_name]
+		existing_indexes = {
+			idx.get("name")
+			for idx in collection.list_search_indexes()
+			if idx.get("name")
+		}
+		if index_name in existing_indexes:
+			print(f"Vector search index already exists: {MEMORY_DB_NAME}.{collection_name}.{index_name}")
+			continue
+		search_index_model = SearchIndexModel(
+			definition={"fields": index_config["fields"]},
+			name=index_name,
+			type="vectorSearch",
+		)
+		collection.create_search_index(model=search_index_model)
+		print(f"Created vector search index: {MEMORY_DB_NAME}.{collection_name}.{index_name}")
+
+
+def create_memory_semantic_fulltext_index(mongo_client: MongoDBClient) -> None:
+	"""Create the Atlas Search fulltext index on memory_semantic for the $rankFusion BM25 text leg."""
+	collection = mongo_client.client[MEMORY_DB_NAME]["memory_semantic"]
+	existing_indexes = {
+		idx.get("name")
+		for idx in collection.list_search_indexes()
+		if idx.get("name")
+	}
+	if MEMORY_SEMANTIC_FULLTEXT_INDEX_NAME in existing_indexes:
+		print(f"Fulltext index already exists: {MEMORY_DB_NAME}.memory_semantic.{MEMORY_SEMANTIC_FULLTEXT_INDEX_NAME}")
+		return
+	search_index_model = SearchIndexModel(
+		definition=MEMORY_SEMANTIC_FULLTEXT_INDEX_CONFIG,
+		name=MEMORY_SEMANTIC_FULLTEXT_INDEX_NAME,
+		type="search",
+	)
+	collection.create_search_index(model=search_index_model)
+	print(f"Created fulltext index: {MEMORY_DB_NAME}.memory_semantic.{MEMORY_SEMANTIC_FULLTEXT_INDEX_NAME}")
+
+
 def create_and_insert_agent_identity(
 	settings,
 	mongo_client: MongoDBClient,
@@ -187,45 +259,19 @@ def create_and_insert_agent_identity(
 	pvk: str | None = None,
 	scope_csv: str = "read,write,llm:invoke",
 ) -> tuple[dict, str]:
-	"""Search for existing agent identity or generate new JWT metadata and upsert into mcp_config.agent_identities."""
-	collection = mongo_client.db["agent_identities"]
-	
-	# Check if agent already exists
-	existing_agent = collection.find_one({"agent_name": agent_name})	
-	if existing_agent:
-		# Use existing credentials without modifying
-		existing_agent.pop("_id", None)
-		metadata = existing_agent
-		resolved_agent_key = metadata.get("agent_key")
-		resolved_pvk = metadata.get("pvk")
-		print(f"Found existing agent: {agent_name}")
-	else:
-		# Generate new credentials only if agent doesn't exist
-		resolved_agent_key = agent_key or str(uuid.uuid4())
-		resolved_pvk = pvk or base64.b64encode(os.urandom(32)).decode("ascii")
-		scope = _parse_scope(scope_csv)
-
-		metadata = {
-			"pvk": resolved_pvk,
-			"agent_name": agent_name,
-			"agent_key": resolved_agent_key,
-			"scope": scope,
-		}
-		
-		collection.insert_one(metadata)
-		print(f"Created new agent: {agent_name}")
-
-	# Generate token using credentials
-	token = _generate_jwt(
+	"""Get or create an agent identity, then print metadata + token."""
+	metadata, token, was_created = get_or_create_agent_identity_and_token(
+		mongo_client=mongo_client,
 		agent_name=agent_name,
-		agent_key=resolved_agent_key,
-		pvk=resolved_pvk,
+		agent_key=agent_key,
+		pvk=pvk,
+		scope_csv=scope_csv,
 	)
-
-	print(json.dumps(metadata, indent=2))		
+	status = "Created new" if was_created else "Found existing"
+	print(f"{status} agent: {agent_name}")
+	print(json.dumps(metadata, indent=2, default=str))
 	print("[AWS | local]_settings.py line:")
 	print(f'AUTH_TOKEN = "{token}"')
-
 	return metadata, token
 
 
@@ -240,6 +286,8 @@ def run_setup(
 	mongo_client.sync_connect_to_mongodb()
 	load_and_insert_mcp_tools(settings, mongo_client)
 	create_airbnb_vector_search_index(mongo_client)
+	create_memory_vector_search_indexes(mongo_client)
+	create_memory_semantic_fulltext_index(mongo_client)
 	if seed_agent_identity:
 		create_and_insert_agent_identity(
 			settings=settings,

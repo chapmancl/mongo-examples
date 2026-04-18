@@ -13,6 +13,11 @@ from .mongodb_client import MongoDBClient
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+_MEMORY_TOOLS = {
+    "intake", "recall", "reflect", "query", "list_sessions",
+    "schema_declare", "strategy_store", "strategy_recall", "get_instructions",
+}
+
 
 SHOW_ONCE = 0
 class MongoMCPMiddleware(Middleware):
@@ -230,6 +235,9 @@ class MongoMCPMiddleware(Middleware):
             self.load_annotations()
             remove_tools = []
             for tool in result:
+                # Memory layer tools are self-describing — never filtered by annotations.
+                if tool.name in _MEMORY_TOOLS:
+                    continue
                 anot = self.endpoint_tools.get(tool.name)
                 if not anot:
                     logger.info(f"No annotation found for tool '{tool.name}', removing from list")

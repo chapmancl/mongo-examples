@@ -116,8 +116,14 @@ class MongoDBClient:
         ping_result = {}
         if not self._connection_initialized:
             ping_result = await self.connect_to_mongodb()
-        else:            
-            ping_result = await self.client.admin.command('ping')
+        else:
+            try:
+                ping_result = await self.client.admin.command('ping')
+            except Exception:
+                # Loop may have changed (e.g. after reload); reconnect with a fresh client.
+                self._connection_initialized = False
+                self.client = {}
+                ping_result = await self.connect_to_mongodb()
         return ping_result
     
     async def connect_to_mongodb(self):
@@ -132,10 +138,14 @@ class MongoDBClient:
             
             self._set_locals()
             self._connection_initialized = True
-            # load all tools to return configs
-            self.ALLTOOLS = await self.get_collection(self.settings.mcp_config_col).distinct("Name",{ "active": True})
+            # load all tools to return configs (best-effort; not all clients need this)
+            try:
+                self.ALLTOOLS = await self.get_collection(self.settings.mcp_config_col).distinct("Name",{ "active": True})
+            except Exception as e:
+                logger.warning(f"Could not load ALLTOOLS (non-fatal): {e}")
+                self.ALLTOOLS = []
             
-        except PyMongoError as e:
+        except Exception as e:
             ip_address = self.get_current_ip()
             logger.error(f"Failed to connect to MongoDB from ip: {ip_address}: {e}")
             self._connection_initialized = False            

@@ -17,6 +17,16 @@ export default function App() {
   const [liveMessage, setLiveMessage] = useState('')
   const [patternSaved, setPatternSaved] = useState(false)
   const [patternSaving, setPatternSaving] = useState(false)
+  const [userId] = useState(() => {
+    let id = localStorage.getItem('mcp_user_id')
+    if (!id) {
+      id = crypto.randomUUID()
+      localStorage.setItem('mcp_user_id', id)
+    }
+    return id
+  })
+  const [sessionId, setSessionId] = useState(() => crypto.randomUUID())
+  const [feedbackGiven, setFeedbackGiven] = useState(null)
 
   function parseMaybeJson(value) {
     if (typeof value !== 'string') return value
@@ -49,9 +59,21 @@ export default function App() {
     if (content && typeof content === 'object') {
       setAnswer(content.text || null)
       const jd = content.jsondata ?? content.jsonData
-      if (jd && (jd.jsonDataType || jd.jsondataType)) {
+      if (jd && typeof jd === 'object') {
         setMapData(jd)
       }
+    }
+
+    // Server detected corrupt history — auto-reset everything
+    if (obj.clear_history) {
+      setHistory([])
+      setSessionId(crypto.randomUUID())
+      setAnswer(null)
+      setMapData(null)
+      setStreamedOutput('')
+      setStatus(null)
+      setLiveMessage('')
+      setPatternSaved(false)
     }
   }
 
@@ -61,6 +83,7 @@ export default function App() {
       const res = await fetch(`${API_URL}/pattern/save`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: userId, session_id: sessionId }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Failed to save pattern')
@@ -69,6 +92,21 @@ export default function App() {
       setError(String(e))
     } finally {
       setPatternSaving(false)
+    }
+  }
+
+  async function sendFeedback(feedback) {
+    if (feedbackGiven !== null) return
+    try {
+      const res = await fetch(`${API_URL}/feedback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: userId, session_id: sessionId, feedback }),
+      })
+      if (!res.ok) throw new Error('Failed to record feedback')
+      setFeedbackGiven(feedback)
+    } catch (e) {
+      setError(String(e))
     }
   }
 
@@ -81,16 +119,19 @@ export default function App() {
     setStatus(null)
     setLiveMessage('')
     setPatternSaved(false)
+    setFeedbackGiven(null)
     try {
       // Try streaming endpoint first
       const res = await fetch(`${API_URL}/query/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input: question, history }),
+        body: JSON.stringify({ input: question, history, user_id: userId, session_id: sessionId }),
       })
-      
+
       if (!res.ok && res.status !== 404) {
-        throw new Error(data.error || 'API error')
+        let errMsg = `HTTP ${res.status}`
+        try { const d = await res.json(); errMsg = d.error || JSON.stringify(d) } catch {}
+        throw new Error(errMsg)
       }
       
       // If streaming available, read NDJSON stream and update live/status/history
@@ -128,7 +169,7 @@ export default function App() {
         const res2 = await fetch(`${API_URL}/query`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ input: question, history }),
+          body: JSON.stringify({ input: question, history, user_id: userId, session_id: sessionId }),
         })
         const data = await res2.json()
         if (!res2.ok) throw new Error(data.error || 'API error')
@@ -155,6 +196,7 @@ export default function App() {
       if (!res.ok) throw new Error(data.error || 'Failed to reset history')
 
       setHistory([])
+      setSessionId(crypto.randomUUID())
       setStatus(null)
       setLiveMessage('')
       setStreamedOutput('')
@@ -206,13 +248,14 @@ export default function App() {
           style={{ width: '100%' }}
         />
       </div>
-      <div style={{ marginTop: 8 }}>
+      <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
         <button onClick={submitQuestion} disabled={loading}>
           {loading ? '⏳ Processing...' : 'Send'}
         </button>
-        <button onClick={resetHistory} disabled={loading} style={{ marginLeft: 8 }}>
+        <button onClick={resetHistory} disabled={loading}>
           Reset History
         </button>
+
       </div>
 
       {error && <div style={{ color: 'red', marginTop: 8 }}>❌ {error}</div>}
@@ -262,6 +305,23 @@ export default function App() {
               }}
             >
               {patternSaved ? '✅ Saved' : patternSaving ? '⏳' : '👍'}
+            </button>
+            <button
+              onClick={() => sendFeedback('negative')}
+              disabled={feedbackGiven !== null || !answer || loading}
+              title={feedbackGiven === 'negative' ? 'Feedback recorded' : 'Wrong answer — flag for review'}
+              style={{
+                background: 'none',
+                border: 'none',
+                cursor: (feedbackGiven !== null || !answer) ? 'default' : 'pointer',
+                fontSize: 22,
+                padding: '2px 6px',
+                opacity: (feedbackGiven !== null || !answer) ? 0.3 : 1,
+                color: feedbackGiven === 'negative' ? 'red' : 'inherit',
+                transition: 'opacity 0.2s ease',
+              }}
+            >
+              {feedbackGiven === 'negative' ? '🚩' : '👎'}
             </button>
           </div>
           <div
