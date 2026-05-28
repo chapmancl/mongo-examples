@@ -4,26 +4,20 @@
     "title": "MongoDB Vector Search MCP Server",
     "description": "A fastMCP MCP server that provides vector search capabilities using MongoDB's $search aggregation pipeline.",
     "database": "sample_airbnb",
-    "collection": "listingsAndReviews",
-    "url":"cluster.mongodb.net"
+    "url": "demo1.mongodb.net",
+    "collection": "listingsAndReviews"
   },
   "tools": {
     "vector_search": {
       "description": "Perform semantic vector similarity search on MongoDB collection using AI embeddings.\n\nThis tool converts natural language queries into vector embeddings using Amazon Titan Embeddings v2 and finds semantically similar property listings. It's ideal for finding properties based on meaning and context rather than exact keyword matches.\n\nUse cases:\n- \"Find a cozy apartment near Central Park\" (semantic understanding of 'cozy')\n- \"Spacious family home with modern amenities\" (understands family needs)\n- \"Romantic getaway with city views\" (contextual search)",
-      "index": "listing_vector_index",
+      "index": "listing_voyage_index",
       "required": [
-        "query_text",
-        "collection"
+        "query_text"
       ],
       "parameters": {
         "query_text": {
           "type": "str",
           "description": "Natural language query describing desired property characteristics. The text will be automatically converted to a 1024-dimensional vector."
-        },
-        "collection": {
-          "type": "str",
-          "description": "The name of the collection this query will execute against. must be listingsAndReviews",
-          "value": "listingsAndReviews"
         },
         "limit": {
           "type": "int",
@@ -64,9 +58,10 @@
         "space": 0,
         "transit": 0,
         "access": 0,
-        "reviews":0,
-        "voyage_embedding": 0
+        "voyage_embedding": 0,
+        "reviews": 0
       },
+<<<<<<< HEAD
       "collection":"listingsAndReviews",
       "returns": "JSON with results array containing matching properties ranked by semantic similarity, each with a similarity score (0.0-1.0, higher is more similar)."
     },
@@ -87,51 +82,13 @@
         }
       },
       "returns": "JSON with unique values array for the specified field, along with count information."
+=======
+      "collection": "listingsAndReviews",
+      "returns": "JSON with results array containing matching properties ranked by semantic similarity, each with a similarity score (0.0-1.0, higher is more similar).",
+      "handler": "vector_search",
+      "vector_path": "voyage_embedding"
+>>>>>>> bba5edc (added subagent, cognito, improved memory search patterns and caching)
     },
-    "get_collection_info": {
-      "description": "Get comprehensive information about the MongoDB collection, database statistics, and search capabilities.\n\nThis tool provides essential metadata about the current database connection and collection status, including document counts, storage size, available indexes, and search configuration. Use this tool to understand the current state of the data and search capabilities.",
-      "required": [],
-      "parameters": {},
-      "returns": "JSON containing complete collection metadata including document count, size, indexes, and search configuration details."
-    },
-    "aggregate_query": {
-      "description": "Execute a custom MongoDB aggregation pipeline query on the collection.\n\nThis tool allows you to run complex MongoDB aggregation queries with full flexibility. You can use any MongoDB aggregation stage including $match, $group, $project, $sort, $lookup, $unwind, $addFields, and many others. This is the most powerful tool for complex data analysis and custom queries.",
-      "reference_documentation": "https://www.mongodb.com/docs/manual/reference/mql/aggregation-stages/#std-label-aggregation-pipeline-operator-reference",
-      "required": [
-        "pipeline",
-        "collection"
-      ],
-      "parameters": {
-        "collection": {
-          "type": "str",
-          "description": "The name of the collection this query will execute against. This tool can execute against any collection."
-        },
-        "pipeline": {
-          "type": "List[Dict[str, Any]]",
-          "description": "MongoDB aggregation pipeline as a list of stage objects. Each stage should be a dictionary representing a MongoDB aggregation stage like $match, $group, $project, $sort, etc."
-        },
-        "limit": {
-          "type": "Optional[int]",
-          "default": null,
-          "constraints": "ge=1, le=1000",
-          "description": "Optional limit to apply to the results. If not specified, no limit will be applied. Recommended for large result sets to avoid memory issues."
-        }
-      },
-      "returns": "JSON with results array containing the aggregation results, along with metadata about the query execution including result count and pipeline information."
-    }
-  },
-  "active": true
-},
-{
-  "Name": "MflixSearch",
-  "module_info": {
-    "title": "MongoDB MCP Server for Netflix Movies",
-    "description": "A fastMCP MCP server that provides search capabilities using MongoDB's aggregation pipeline.",
-    "database": "sample_mflix",
-    "collection": "movies",
-    "url":"cluster.mongodb.net"
-  },
-  "tools": {
     "get_unique_values": {
       "description": "Get unique values for a specific field in the MongoDB collection. This tool retrieves all unique values for a specified field to determine what filter options are available when using vector_search. Use the get_collection_info tool to see what fields are available in the collection, then use this tool to see what values exist for those filters.",
       "required": [
@@ -191,7 +148,7 @@
     "description": "A fastMCP MCP server that provides search capabilities using MongoDB's aggregation pipeline.",
     "database": "sample_weatherdata",
     "collection": "data",
-    "url":"cluster.mongodb.net"
+    "url": "demo1.mongodb.net"
   },
   "tools": {
     "get_unique_values": {
@@ -247,13 +204,75 @@
   "active": false
 },
 {
+  "Name": "MflixSearch",
+  "module_info": {
+    "title": "MongoDB MCP Server for Netflix Movies",
+    "description": "A fastMCP MCP server that provides search capabilities using MongoDB's aggregation pipeline.",
+    "database": "sample_mflix",
+    "collection": "movies",
+    "url": "demo1.mongodb.net"
+  },
+  "tools": {
+    "get_unique_values": {
+      "description": "Get unique values for a specific field in the MongoDB collection. This tool retrieves all unique values for a specified field to determine what filter options are available when using vector_search. Use the get_collection_info tool to see what fields are available in the collection, then use this tool to see what values exist for those filters.",
+      "required": [
+        "field",
+        "collection"
+      ],
+      "parameters": {
+        "collection": {
+          "type": "str",
+          "description": "The name of the collection this query will execute against. This tool can execute against any collection."
+        },
+        "field": {
+          "type": "str",
+          "description": "The field name to get unique values for. Can be nested fields using dot notation (e.g., \"address.market\", \"address.country_code\")."
+        }
+      },
+      "returns": "JSON with unique values array for the specified field, along with count information."
+    },
+    "get_collection_info": {
+      "description": "Get comprehensive information about the MongoDB collection, database statistics, and search capabilities.\n\nThis tool provides essential metadata about the current database connection and collection status, including document counts, storage size, available indexes, and search configuration. Use this tool to understand the current state of the data and search capabilities.",
+      "required": [],
+      "parameters": {},
+      "returns": "JSON containing complete collection metadata including document count, size, indexes, and search configuration details."
+    },
+    "aggregate_query": {
+      "description": "Execute a custom MongoDB aggregation pipeline query on the collection.\n\nThis tool allows you to run complex MongoDB aggregation queries with full flexibility. You can use any MongoDB aggregation stage including $match, $group, $project, $sort, $lookup, $unwind, $addFields, and many others. This is the most powerful tool for complex data analysis and custom queries.",
+      "reference_documentation": "https://www.mongodb.com/docs/manual/reference/mql/aggregation-stages/#std-label-aggregation-pipeline-operator-reference",
+      "required": [
+        "pipeline",
+        "collection"
+      ],
+      "parameters": {
+        "collection": {
+          "type": "str",
+          "description": "The name of the collection this query will execute against. This tool can execute against any collection."
+        },
+        "pipeline": {
+          "type": "List[Dict[str, Any]]",
+          "description": "MongoDB aggregation pipeline as a list of stage objects. Each stage should be a dictionary representing a MongoDB aggregation stage like $match, $group, $project, $sort, etc."
+        },
+        "limit": {
+          "type": "Optional[int]",
+          "default": null,
+          "constraints": "ge=1, le=1000",
+          "description": "Optional limit to apply to the results. If not specified, no limit will be applied. Recommended for large result sets to avoid memory issues."
+        }
+      },
+      "returns": "JSON with results array containing the aggregation results, along with metadata about the query execution including result count and pipeline information."
+    }
+  },
+  "active": true
+},
+{
   "Name": "shipwreckSearch",
   "module_info": {
     "title": "MongoDB MCP Server for searching historical shipwreck data",
     "description": "A fastMCP MCP server that provides search capabilities using MongoDB's aggregation pipeline.",
     "database": "sample_geospatial",
-    "collection": "shipwrecks",
-    "url": "demo1.mongodb.net"
+    "url": "demo1.mongodb.net",
+    "collection": "shipwrecks"
   },
   "tools": {
     "get_unique_values": {
@@ -310,8 +329,7 @@
       "location_field": "coordinates",
       "required": [
         "longitude",
-        "latitude",
-        "collection"
+        "latitude"
       ],
       "parameters": {
         "longitude": {
@@ -348,10 +366,6 @@
           "constraints": "ge=1, le=100",
           "description": "Maximum number of results to return (default: 10, max: 100)."
         },
-        "collection": {
-          "type": "str",
-          "description": "This value should always be shipwrecks for this tool"
-        },
         "geo_field": {
           "type": "str",
           "default": "coordinates",
@@ -365,10 +379,15 @@
         "coordinates": 1,
         "distance_meters": 1
       },
-      "returns": "JSON with results array containing shipwrecks located within the specified distance of the given coordinates, sorted by proximity, each including a distance_meters field."
+      "returns": "JSON with results array containing shipwrecks located within the specified distance of the given coordinates, sorted by proximity, each including a distance_meters field.",
+      "collection": "shipwrecks"
     }
   },
   "active": true
+<<<<<<< HEAD
 }
 
 ]
+=======
+}]
+>>>>>>> bba5edc (added subagent, cognito, improved memory search patterns and caching)

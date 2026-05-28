@@ -41,34 +41,39 @@ class MongoDBQueryServer(MongoDBClient):
             # Detect inclusion projection: at least one value is 1 (and it's not _id)
             non_id = {k: v for k, v in projection.items() if k != '_id'}
             if non_id and all(v == 1 for v in non_id.values()):
-                # Inclusion — embedding not in list so already excluded
+                # Inclusion — embedding not in list so already excluded. Always retain the
+                # retrieval 'score' ($addFields vectorSearchScore) so it survives the
+                # $project stage (which runs AFTER the score is added); otherwise callers
+                # (and the reranker) lose the vector similarity score.
+                if projection.get('score') != 1:
+                    return {**projection, 'score': 1}
                 return projection
             # Exclusion or mixed — add the vector path
             return {**projection, vector_path: 0}
 
         # No projection: exclude only the vector field
         return {vector_path: 0}
-
+    
     def set_config(self, config: Dict) -> None:
         """Set the tool configuration from a dictionary. this overrides the default settings"""
         if config is None:
             raise ValueError("Config cannot be None. Check env variables and AWS secrets.")
-
+        
         self.tool_config = config
         self.tool_name  = config["Name"]
         self.description = config["module_info"]["description"]
         print(f"Using settings from tool config {self.tool_name}")
         super().set_config(config["module_info"])
-
+            
     async def get_mongo_info(self, shortResponse=False) -> Tuple[bool, Dict[str, Any]]:
         """
         Retrieve MongoDB connection and collection health information.
-
+        
         This function performs a health check on the MongoDB connection and gathers
         essential database statistics including connection status, collection metrics,
         and server information. It's designed to be used for monitoring, debugging,
         and health check endpoints.
-
+                
         Returns:
             Tuple[bool, Dict[str, Any]]: A tuple containing:
                 - bool: Failed flag (True if any operation failed, False if all succeeded)
@@ -76,33 +81,33 @@ class MongoDBQueryServer(MongoDBClient):
                     - status: "healthy" or "unhealthy"
                     - version: MongoDB server version
                     - mongodb: Nested dict with connection details
-                    - error: Error message (only present if operation failed)
+                    - error: Error message (only present if operation failed)        
         """
         failed = True
         health_status = {
             "status": "unhealthy",
             "toolname": self.tool_name,
             "description": self.description,
-            "mongodb": {
+            "mongodb": {                
                 "database": self._db_name,
                 "collections": {}
             }
         }
         ping_result = None
         try:
-            # Ensure connection is established
+            # Ensure connection is established            
             ping_result = await self.ensure_connection()
-
+            
             if ping_result and ping_result.get("ok", 0) == 1.0:
-                is_connected = True
+                is_connected = True                
             else:
                 is_connected = False
                 health_status["error"] = "MongoDB Connection failed"
                 failed = True
-
+            
             health_status["mongodb"]["connected"] = is_connected
             #health_status["mongodb"]["collections"] = self.available_collections
-
+            
             if is_connected:
                 # get all the user collections ignoring system collections
                 all_collection_names = await self.db.list_collection_names()
@@ -114,23 +119,23 @@ class MongoDBQueryServer(MongoDBClient):
                 # Convert MongoDB Timestamp object to datetime
                 cluster_time = ping_result["$clusterTime"]["clusterTime"]
                 health_status["mongodb"]["timestamp"] = str(datetime.datetime.fromtimestamp(cluster_time.time).isoformat())
-                health_status["status"] = "healthy"
+                health_status["status"] = "healthy"                
                 failed = False
-
+                
                 if not shortResponse:
                     # Get server info and collection stats
                     collection_stats = await asyncio.gather(
-                        *[self.db.command("collStats", collection_name) for collection_name in self.available_collections]
-                    )
+                        *[self.db.command("collStats", collection_name) for collection_name in self.available_collections]                        
+                    )   
                     # List all available collections in the database
                     for stats, collection_name in zip(collection_stats, self.available_collections):
                         health_status["mongodb"]["collections"][collection_name] = {
                             "document_count" : stats.get("count", 0),
                             "size_bytes" : stats.get("size", 0)
                         }
-
-
-        except Exception as e:
+                    
+                
+        except Exception as e:                        
             health_status["error"]= str(e)
             logger.error(f"Health check failed: {e}")
             traceback.print_exc()
@@ -142,7 +147,7 @@ class MongoDBQueryServer(MongoDBClient):
         failed, info = await self.get_mongo_info(shortResponse=False)
         if failed:
             raise ConnectionError(f"Failed to retrieve MongoDB info: {info.get('error','Unknown error')}")
-
+        
         for coll in self.available_collections:
             indexes = []
             search_indexes = []
@@ -151,7 +156,7 @@ class MongoDBQueryServer(MongoDBClient):
             try:
                 async for idx in self.get_collection(coll).list_indexes():
                     indexes.append(idx)
-
+                
                 async for sidx in self.get_collection(coll).list_search_indexes():
                     indx = sidx
                     # clean up vector index info for readability
@@ -162,8 +167,8 @@ class MongoDBQueryServer(MongoDBClient):
                 # some collections don't allow index listing
                 logger.error(f"Failed to retrieve indexes for collection {coll}")
                 continue
-
-            coll_info = {
+            
+            coll_info = {                                
                 "indexes": [
                     {
                         "name": idx.get("name"),
@@ -172,34 +177,34 @@ class MongoDBQueryServer(MongoDBClient):
                     } for idx in indexes
                 ]
             }
-
+            
             # Only add search_indexes field if there are search indexes
             if search_indexes:
                 coll_info["search_indexes"] = [
                     sidx for sidx in search_indexes
                 ]
-
+            
             # build the collection info structure
             if "collections" not in info["mongodb"]:
                 info["mongodb"]["collections"] = {}
             if coll not in info["mongodb"]["collections"]:
                 info["mongodb"]["collections"][coll] = {}
-            info["mongodb"]["collections"][coll].update(coll_info)
+            info["mongodb"]["collections"][coll].update(coll_info)        
         return info
-
+    
     async def vector_search(self, collection: str, vector_qry: str, filters: list = None, limit: int = 10, num_candidates: int = 100, index: str = None, vector_path: str = None, projection: dict = None) -> List[Dict[str, Any]]:
         """
         Perform vector search using MongoDB's $search aggregation pipeline
-
+        
         Args:
             vector_qry: The vectorized embeddings of the query string for similarity search
             limit: Maximum number of results to return
             num_candidates: Number of candidates to consider during search
-
+            
         Returns:
             List of search results with similarity scores
         """
-
+        
         try:
             if not collection or not str(collection).strip():
                 raise ValueError("mongodb_query_provider.vector_search:collection must be a non-empty string")
@@ -245,8 +250,8 @@ class MongoDBQueryServer(MongoDBClient):
 
             if _projection:
                 pipeline.insert(2, {"$project": _projection})
-
-            # Apply filters to narrow the search if provided
+            
+            # Apply filters to narrow the search if provided        
             if filters:
                 match_filter = {}
                 if len(filters) > 1:
@@ -254,22 +259,22 @@ class MongoDBQueryServer(MongoDBClient):
                     match_filter = {"$and": []}
                     for key, value in filters:
                         match_filter["$and"].append({key: value})
-
+                        
                 else:
                     # Single filter case
                     key, value = filters[0]
                     match_filter[key] = value
-
+                
                 # Inject the filter into the pipeline
-                pipeline[0]["$vectorSearch"]["filter"] = match_filter
-            results = []
+                pipeline[0]["$vectorSearch"]["filter"] = match_filter            
+            results = []            
             logger.debug(f"Vector search pipeline: {pipeline}")
             logger.debug(f"Vector search collection: {collection}")
             async for doc in self.get_collection(collection).aggregate(pipeline):
                 results.append(doc)
             logger.debug(f"Vector search returned {len(results)} results")
             return results
-
+            
         except PyMongoError as e:
             logger.error(f"Vector search failed: {e}")
             raise
@@ -284,6 +289,7 @@ class MongoDBQueryServer(MongoDBClient):
         filters: list = None,
         limit: int = 10,
         geo_field: Optional[str] = None,
+        projection: Optional[Dict] = None,
     ) -> List[Dict[str, Any]]:
         """
         Perform geospatial search using MongoDB's $geoNear aggregation stage.
@@ -297,6 +303,8 @@ class MongoDBQueryServer(MongoDBClient):
             filters: Optional list of filters in [field, value] format.
             limit: Maximum number of results to return.
             geo_field: GeoJSON Point field path with a 2dsphere index.
+            projection: Optional $project fields; falls back to the tool config's
+                'projection' when not supplied by the caller.
 
         Returns:
             List of search results with computed distance in meters.
@@ -368,9 +376,9 @@ class MongoDBQueryServer(MongoDBClient):
                 },
             ]
 
-            projection = geo_config.get("projection")
-            if projection:
-                pipeline.append({"$project": projection})
+            _projection = projection or geo_config.get("projection")
+            if _projection:
+                pipeline.append({"$project": _projection})
 
             results = []
             async for doc in self.get_collection(collection).aggregate(pipeline):
@@ -380,28 +388,43 @@ class MongoDBQueryServer(MongoDBClient):
         except PyMongoError as e:
             logger.error(f"Geospatial search failed: {e}")
             raise
-
-    async def text_search(self, collection: str, query_text: str, limit: int = 10) -> List[Dict[str, Any]]:
+    
+    async def text_search(self, collection: str, query_text: str, limit: int = 10, projection: Optional[Dict] = None) -> List[Dict[str, Any]]:
         """
         Perform text search using MongoDB's $search aggregation pipeline
-
+        
         Args:
             query_text: The text query for search
             limit: Maximum number of results to return
+            projection: Optional $project fields; falls back to the tool config's
+                'projection' when not supplied by the caller.
 
         Returns:
             List of search results with relevance scores
         """
         try:
             await self.ensure_connection()
+            # Prefer caller-supplied projection (injected by middleware from the named
+            # tool config entry), falling back to legacy tool_config['tools']['text_search']
+            # for backward-compatible single-tool deployments.
+            _ts_cfg = self.tool_config.get('tools', {}).get('text_search', {})
+            _ts_projection = projection or _ts_cfg.get('projection')
+            # Always retain the BM25 'score' ($addFields searchScore) through the
+            # projection: the $project stage runs AFTER the score is added, so an
+            # inclusion projection that omits 'score' would silently drop it (and break
+            # a downstream rerank feed). Exclusion/mixed projections keep score already.
+            if isinstance(_ts_projection, dict) and _ts_projection:
+                _non_id = {k: v for k, v in _ts_projection.items() if k != '_id'}
+                if _non_id and all(v == 1 for v in _non_id.values()) and _ts_projection.get('score') != 1:
+                    _ts_projection = {**_ts_projection, 'score': 1}
             # MongoDB Atlas Text Search aggregation pipeline
             pipeline = [
                 {
                     "$search": {
-                        "index": self.tool_config['tools']['text_search']['index'],
+                        "index": _ts_cfg['index'],
                         "text": {
                             "query": query_text,
-                            "path": self.tool_config['tools']['text_search']['fields_searched']
+                            "path": _ts_cfg['fields_searched']
                         }
                     }
                 },
@@ -414,21 +437,21 @@ class MongoDBQueryServer(MongoDBClient):
                     "$limit": limit
                 },
                 {
-                    "$project": self.tool_config['tools']['text_search']['projection']
-                },
-                {
                     "$sort": {
                         "score": -1
                     }
                 }
             ]
 
+            if _ts_projection:
+                pipeline.insert(-1, {"$project": _ts_projection})
+            
             results = []
             async for doc in self.get_collection(collection).aggregate(pipeline):
                 results.append(doc)
             logger.info(f"Text search returned {len(results)} results")
             return results
-
+            
         except PyMongoError as e:
             logger.error(f"Text search failed: {e}")
             raise
@@ -584,21 +607,67 @@ class MongoDBQueryServer(MongoDBClient):
     async def agg_pipeline(self, collection: str, pipeline: List[Dict]) -> List[Dict[str, Any]]:
         """
         Perform MongoDB's aggregation pipeline
-
+        
         Args:
-            pipeline: The pipeline to execute (list of aggregation stages)
-
+            pipeline: The pipeline to execute (list of aggregation stages)            
+            
         Returns:
             List of results
         """
         try:
             await self.ensure_connection()
-            # MongoDB Atlas aggregation pipeline
+            # MongoDB Atlas aggregation pipeline                        
             results = []
             async for doc in self.get_collection(collection).aggregate(pipeline):
                 results.append(doc)
             return results
-
+            
         except PyMongoError as e:
             logger.error(f"pipeline query failed: {e}")
             raise
+
+    async def run_update(self, collection: str, filter: Dict, update: Dict, upsert: bool = False, multi: bool = False) -> Dict[str, Any]:
+        """Run an update/upsert for a stored custom_pipeline procedure.
+
+        Args:
+            filter: query selecting the document(s) to update
+            update: update-operator document ($set, $setOnInsert, $inc, ...)
+            upsert: insert a new document when no match is found
+            multi:  update all matching documents (update_many) vs one (update_one)
+        """
+        await self.ensure_connection()
+        coll = self.get_collection(collection)
+        bfilter = self._convert_oid_to_objectid(filter)
+        if multi:
+            res = await coll.update_many(bfilter, update, upsert=bool(upsert))
+        else:
+            res = await coll.update_one(bfilter, update, upsert=bool(upsert))
+        return {
+            "matched_count": res.matched_count,
+            "modified_count": res.modified_count,
+            "upserted_id": res.upserted_id,
+        }
+
+    async def run_insert(self, collection: str, document: Any) -> Dict[str, Any]:
+        """Insert one document (dict) or many (list of dicts) for a custom_pipeline procedure."""
+        await self.ensure_connection()
+        coll = self.get_collection(collection)
+        if isinstance(document, list):
+            res = await coll.insert_many(document)
+            return {"inserted_ids": res.inserted_ids, "inserted_count": len(res.inserted_ids)}
+        res = await coll.insert_one(document)
+        return {"inserted_id": res.inserted_id}
+
+    async def run_delete(self, collection: str, filter: Dict, multi: bool = False) -> Dict[str, Any]:
+        """Delete one or many documents for a custom_pipeline procedure.
+
+        A non-empty filter is enforced by the handler to avoid accidental full-collection deletes.
+        """
+        await self.ensure_connection()
+        coll = self.get_collection(collection)
+        bfilter = self._convert_oid_to_objectid(filter)
+        if multi:
+            res = await coll.delete_many(bfilter)
+        else:
+            res = await coll.delete_one(bfilter)
+        return {"deleted_count": res.deleted_count}

@@ -54,9 +54,6 @@ class LocalSettings:
         self.ENABLE_CACHE_POINTS = os.getenv('ENABLE_CACHE_POINTS', 'true').lower() in ['1', 'true', 'yes', 'on']
         self.ENABLE_BEDROCK_CACHING = True
 
-        # Static auth token for the MCP server (generate via the MCP server's token endpoint)
-        self.AUTH_TOKEN = os.getenv('MCP_AUTH_TOKEN', 'your-static-jwt-token-here')
-
         self.agent_instructions = _MEMORY_AGENT_INSTRUCTIONS
 
         # Hardcoded MongoDB credentials for local development — replace with your Atlas cluster details

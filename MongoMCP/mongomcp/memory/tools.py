@@ -27,7 +27,7 @@ def build_memory_tool_fns(svc: MemoryService):
     """
 
     async def intake(
-        content: str,
+        content: Optional[str] = None,
         memory_type: str = "episodic",
         importance: float = 0.5,
         decay_rate: float = 0.01,
@@ -63,9 +63,9 @@ def build_memory_tool_fns(svc: MemoryService):
                 _id=_id,
             )
         except Exception as exc:
-            logger.error("intake failed: %s", exc)
+            logger.error("intake failed: %s: %s", type(exc).__name__, exc)
             logger.debug("".join(traceback.format_exception(None, exc, exc.__traceback__)))
-            return {"error": f"intake failed: {exc}"}
+            return {"error": f"intake failed: {type(exc).__name__}: {exc}"}
 
     async def recall(
         query: Optional[str] = None,

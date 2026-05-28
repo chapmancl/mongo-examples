@@ -114,7 +114,7 @@ class PromptAgent:
             "[PromptAgent] _build_tool_config: filtered to %d tools: %s",
             len(filtered),
             matched_names,
-        )
+        )        
         if unmatched:
             logger.warning(
                 "[PromptAgent] _build_tool_config: requested tool_names not found in catalog: %s",
@@ -135,7 +135,7 @@ class PromptAgent:
         tool_names: Optional[List[str]] = None,
         session_id: Optional[str] = None,
         system_instructions: Optional[str] = None,
-        emit_fn: Optional[Callable] = None,
+        emit_fn: Optional[Callable] = None,        
         token: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """Execute a Bedrock invoke loop and return the result as a dict.
@@ -156,7 +156,7 @@ class PromptAgent:
                      ``(message, status=...)`` — when provided, sub-agent
                      progress messages are forwarded to the UI stream.
         """
-
+        
         # --- 1. Build filtered tool config ---
         filtered_tools = self._build_tool_config(tool_names)
         logger.debug(
@@ -193,7 +193,7 @@ class PromptAgent:
             )
 
         context_str: Optional[str] = None
-        if context is not None:
+        if context is not None:            
             context_str = (
                 json.dumps(context) if not isinstance(context, str) else context
             )
@@ -255,8 +255,8 @@ class PromptAgent:
             output["memory_id"] = memory_id
         if session_id:
             output["session_id"] = session_id
-
-
+        
+        
         # --- 5. Persist conversation snapshot (best-effort, always runs) ---
         if self._save_fn is not None:
             try:
@@ -264,7 +264,7 @@ class PromptAgent:
                 if isinstance(token, dict):
                     agent_id = token.get("agent_key")
                 elif token is not None:
-                    agent_id = token.client_id
+                    agent_id = token.client_id                        
                 result_or_coro = self._save_fn(output, agent_id, "agent_run_prompt", "user_prompt", _doc_id)
                 if inspect.isawaitable(result_or_coro):
                     await result_or_coro

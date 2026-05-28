@@ -103,6 +103,7 @@ class WebUiBedrockClient(BedrockClient):
                 "history": history,
                 "usage": usage,
                 "stats": stats,
+                "tool_timings": response_obj.get("tool_timings"),
             }
 
         # Get the raw assistant text from history
@@ -126,6 +127,7 @@ class WebUiBedrockClient(BedrockClient):
                 "history": history,
                 "usage": usage,
                 "stats": stats,
+                "tool_timings": response_obj.get("tool_timings"),
             }
 
         # Only extract JSON via [JSON_DATA_START]...[JSON_DATA_END] tags.
@@ -137,4 +139,5 @@ class WebUiBedrockClient(BedrockClient):
             "history": history,
             "usage": usage,
             "stats": stats,
+            "tool_timings": response_obj.get("tool_timings"),
         }

@@ -73,7 +73,7 @@ def register_memory_tools(mcp, db_client, llm_client, settings) -> Dict[str, Any
 
     @mcp.tool()
     async def intake(
-        content: Annotated[str, Field(description="The memory content to store.")],
+        content: Annotated[Optional[str], Field(default=None, description="The memory content to store. Required for a NEW memory; may be omitted on an _id update that only changes payload/tags/scores — this skips re-embedding and leaves the existing vector untouched.")] = None,
         memory_type: Annotated[str, Field(description="Memory type tag, e.g. 'episodic', 'task', 'step:execution', 'session:summary'.")] = "episodic",
         importance: Annotated[float, Field(default=0.5, description="Importance score 0.0-1.0.", ge=0.0, le=1.0)] = 0.5,
         decay_rate: Annotated[float, Field(default=0.01, description="How quickly importance decays per day (0=no decay, 0.1=fast).", ge=0.0, le=1.0)] = 0.01,
@@ -86,7 +86,7 @@ def register_memory_tools(mcp, db_client, llm_client, settings) -> Dict[str, Any
         schema_version: Annotated[Optional[str], Field(default=None, description="Declared schema name to validate the payload against. Warnings returned but write still succeeds.")] = None,
         scope: Annotated[int, Field(default=-1, description="Visibility scope — MUST be a top-level parameter, not inside payload. 0=shared (all agents), 10=agent-only, 20=this user any session, 30=this user+session (default), 40=this user+session+agent. -1 = use default (30).")] = -1,
         related_docs: Annotated[Optional[List[Dict[str, Any]]], Field(default=None, description="Explicit graph links to store on this memory. Each entry: {id: ObjectID hex, relation: string, explicit: true}. No automatic vector-search linking is performed — use memory_reflect(operation='link') after the fact for bulk linking.")] = None,
-        _id: Annotated[Optional[str], Field(default=None, description="Optional ObjectID hex string. When provided, updates the existing memory with this _id in-place rather than inserting a new document. Re-embeds the new content and updates all supplied fields. The _id, related_docs, and session_id are preserved so all graph links remain valid.")] = None,
+        _id: Annotated[Optional[str], Field(default=None, description="Optional ObjectID hex string. When provided, updates the existing memory with this _id in-place rather than inserting a new document. Re-embeds only when content is supplied; a payload-only update leaves the vector untouched. The _id, related_docs, and session_id are preserved so all graph links remain valid.")] = None,
         token: Annotated[AccessToken, Depends(get_access_token)] = None,
     ):
         """Store a memory with optional explicit related_docs links. Near-duplicate warning returned if cosine similarity >= 0.92 with an existing doc. No automatic links are created — use memory_reflect(operation='link') to add links explicitly."""
@@ -214,7 +214,7 @@ def register_memory_tools(mcp, db_client, llm_client, settings) -> Dict[str, Any
             name=name, context=context, _id=_id, tags=tags, entities=entities,
             username=username, agent_id=agent_id, scope=scope,
             session_id=session_id, importance=importance, decay_rate=decay_rate,
-            memory_type=memory_type,
+            memory_type=memory_type,            
             payload=payload, schema_version=schema_version,
             superseded_by=superseded_by,
             related_doc_ids=related_doc_ids,

@@ -57,7 +57,6 @@ class AWSSettings:
         self.ENABLE_BEDROCK_CACHING = True
 
         self.agent_instructions = _MEMORY_AGENT_INSTRUCTIONS
-
         self._secrets_client = boto3.client('secretsmanager', region_name=self.aws_region)
         self._credentials_cache: Optional[Dict[str, str]] = None
         self.get_mongo_credentials()

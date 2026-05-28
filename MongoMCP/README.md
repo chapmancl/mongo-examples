@@ -13,6 +13,30 @@ mongomcp/       Core package: server, middleware, auth, Bedrock client, cache
 mongomcp/agent/ Web UI subpackage: CachedQueryProcessor, ToolRouter, WebUiBedrockClient
 ```
 
+## Memory Architecture
+
+DynamicMCP treats memory as a persistent system primitive, not as text copied
+back into a prompt. The memory service exposes typed MCP operations for storing,
+recalling, linking, querying, and versioning records. Stateless workers mount
+the same memory tool surface on every invocation, so durable knowledge and
+behavior can be shared without relying on process-local state.
+
+The model has two complementary retrieval modes:
+
+- **General memory**: semantic recall over episodic and long-lived records,
+  scored by vector relevance, importance, and temporal decay.
+- **Behavioral memory**: versioned strategies and read-only query functions
+  that provide a stable, governed execution path for recurring work.
+
+Records are typed, scope-controlled, and explicitly linked. Query functions
+turn an authored multi-step retrieval procedure into a named tool with a stable
+contract; the runtime validates that these procedures remain read-only.
+
+See [Memory architecture and decisions](docs/memory-architecture.md) for the
+implementation model, [Memory workflow](docs/memory-workflow.md) for request
+flows and MCP examples, and [Memory as a System Primitive](docs/memory-as-a-system-primitive.md)
+for the full design article.
+
 ## Prerequisites
 
 - Python 3.10+
@@ -104,6 +128,15 @@ python tools/mongosetup.py
 - upsert the generated metadata into `mcp_config.agent_identities`
 - print the `AUTH_TOKEN = "..."` line for local settings updates
 
+The portable semantic-memory seed is deliberately opt-in. To upsert
+`tools/mcp_config.memory_semantic.json` into `mcp_config.memory_semantic` by
+`_id`, run:
+
+```bash
+python tools/mongosetup.py --load-memory-seed
+```
+
+Re-running that command refreshes only the managed bootstrap records.
 
 ## Environment Variables
 
@@ -213,6 +246,14 @@ pip install "./mongomcp[agent]"  # + agent deps (flask, gunicorn, pydantic)
 ```
 
 The server container installs `mongomcp` only. The WebUI container installs `mongomcp[agent]`.
+
+## Documentation
+
+| Document | Purpose |
+|---|---|
+| [Memory architecture and decisions](docs/memory-architecture.md) | Data model, retrieval behavior, scopes, graph links, strategy versioning, and query functions. |
+| [Memory workflow](docs/memory-workflow.md) | Agent and service workflows, record contracts, and a worked MCP example. |
+| [Memory as a System Primitive](docs/memory-as-a-system-primitive.md) | Full technical article on deterministic retrieval and virtual abstractions over memory. |
 
 ---
 

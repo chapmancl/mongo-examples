@@ -19,6 +19,7 @@ collection/index values.
 
 import json
 import logging
+import time
 from typing import Any, Dict, List, Optional, Annotated
 
 from pydantic import Field
@@ -27,11 +28,12 @@ from fastmcp.tools import Tool
 from fastmcp.server.dependencies import get_access_token, AccessToken
 
 from .handlers import build_query_handler_fns
+from .multi_step import build_multi_step_handler
 
 logger = logging.getLogger(__name__)
 
 
-def register_query_tools(mcp, mongo_server, llm_client, endpoint_tools: dict) -> dict:
+def register_query_tools(mcp, mongo_server, llm_client, endpoint_tools: dict, middleware=None) -> dict:
     """
     Register all query MCP tools on the given FastMCP instance.
 
@@ -48,6 +50,9 @@ def register_query_tools(mcp, mongo_server, llm_client, endpoint_tools: dict) ->
     """
     dispatch = {}
     handler_fns = build_query_handler_fns(mongo_server, llm_client)
+    # Multi-step read-only functions (config-driven query chains) share the same
+    # config-name -> handler registration path as the other pinned handlers.
+    handler_fns["multi_step"] = build_multi_step_handler(mongo_server, llm_client)
 
     # ---- Generic tools (LLM supplies collection as a normal parameter) ----
 
@@ -107,7 +112,7 @@ def register_query_tools(mcp, mongo_server, llm_client, endpoint_tools: dict) ->
                 result["percentage"] = round((result["count"] / total_docs) * 100, 2)
             return {
                 "field": field,
-                "unique_values": json.loads(json.dumps(results, default=str)),
+                "unique_values": results,
                 "total_unique_count": len(results),
                 "total_documents": total_docs,
             }
@@ -147,10 +152,12 @@ def register_query_tools(mcp, mongo_server, llm_client, endpoint_tools: dict) ->
             if limit is not None:
                 if not any("$limit" in stage for stage in pipeline):
                     final_pipeline.append({"$limit": limit})
+            _t0 = time.monotonic()
             results = await mongo_server.agg_pipeline(collection, final_pipeline)
-            logger.info(f"Aggregation query returned {len(results)} results")
+            _elapsed_ms = int((time.monotonic() - _t0) * 1000)
+            logger.info(f"Aggregation query returned {len(results)} results in {_elapsed_ms} ms")
             return {
-                "results": json.loads(json.dumps(results, default=str)),
+                "results": results,
                 "count": len(results),
                 "query_info": {
                     "pipeline": final_pipeline,
@@ -180,9 +187,44 @@ def register_query_tools(mcp, mongo_server, llm_client, endpoint_tools: dict) ->
         fn = handler_fns.get(handler_name)
         if fn is None:
             continue
-        tool_obj = Tool.from_function(fn, name=tool_name)
+        # output_schema=None disables FastMCP's inferred outputSchema. These handlers return
+        # raw Mongo documents (BSON ObjectId/datetime in _id etc.), which FastMCP cannot
+        # serialize into structuredContent — with an inferred schema that yields
+        # "outputSchema defined but no structured output returned". Results are consumed as
+        # text (content[0].text), so no structured schema is needed.
+        tool_obj = Tool.from_function(fn, name=tool_name, output_schema=None)
         mcp.add_tool(tool_obj)
         dispatch[tool_name] = fn
         logger.info(f"Registered collection tool '{tool_name}' -> handler '{handler_name}'")
+
+    def ensure_tool_registered(tool_name: str, tool_cfg: dict) -> bool:
+        """Register a config-driven tool with FastMCP on demand (idempotent).
+
+        Startup only registers tools that existed then. A function defined/redefined on
+        ANY container mid-session (e.g. a dynamic fn_ query function) is written to Mongo
+        and picked up by the middleware's fresh-read gate/injection — but FastMCP still has
+        no handler for it, so dispatch fails with 'Unknown tool'. This registers it against
+        the shared handler the moment it is first invoked, so define->invoke works with no
+        container restart. Safe to call on every call: it no-ops once the tool is known.
+        """
+        if tool_name in dispatch:
+            return True
+        handler_name = (tool_cfg or {}).get("handler", tool_name)
+        fn = handler_fns.get(handler_name)
+        if fn is None:
+            return False
+        try:
+            mcp.add_tool(Tool.from_function(fn, name=tool_name, output_schema=None))
+            dispatch[tool_name] = fn
+            logger.info(f"Dynamically registered collection tool '{tool_name}' -> handler '{handler_name}'")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to dynamically register tool '{tool_name}': {e}")
+            return False
+
+    # Expose on-demand registration to the middleware so on_call_tool can register a
+    # freshly-defined function before dispatch (define->invoke without restart).
+    if middleware is not None:
+        middleware.ensure_tool_registered = ensure_tool_registered
 
     return dispatch
