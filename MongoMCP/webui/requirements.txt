@@ -1,4 +1,3 @@
-flask
-flask-cors
-requests
-gunicorn
+# All webui dependencies (flask, flask-cors, gunicorn, requests, pydantic) are
+# provided by mongomcp[agent] installed in Dockerfile.base.
+# Add any webui-specific packages here that are NOT part of mongomcp[agent].

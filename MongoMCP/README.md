@@ -2,6 +2,8 @@
 
 A configurable Model Context Protocol (MCP) server that dynamically loads tool configurations from MongoDB. Includes a Web UI agent frontend backed by Amazon Bedrock.
 
+![Architecture](../AgenticArchitecture.png)
+
 ## Architecture
 
 ```
@@ -18,6 +20,39 @@ mongomcp/agent/ Web UI subpackage: CachedQueryProcessor, ToolRouter, WebUiBedroc
 - AWS credentials in `~/.aws/` (Bedrock + Secrets Manager)
 - MongoDB Atlas cluster with an MCP config collection and target data collection(s)
 
+
+## Required Local Settings
+
+Before running the local setup, update the hardcoded MongoDB credentials in `local_settings.py`:
+
+```python
+self._credentials = {
+    "username": "your_mongodb_username",
+    "password": "your_mongodb_password",
+    "mongoUrl": "your_cluster.mongodb.net"
+}
+```
+
+This value must be set in both places:
+
+- `MongoMCP/local_settings.py`
+- `MongoMCP/webui/local_settings.py`
+
+The `mongoUrl` value is used by `tools/mongosetup.py` to rewrite `module_info.url` in the seeded `mcp_tools` documents.
+
+For the Web UI, you must also copy the token printed by the setup script into `webui/local_settings.py`:
+
+```python
+self.AUTH_TOKEN = "paste_the_AUTH_TOKEN_value_here"
+```
+
+Run the setup scripts below after setting credentials. You will see an output line in this format:
+See [MongoDB database setup](#mongodb-database-setup) for details on the database setup.
+
+```bash
+AUTH_TOKEN = "..."
+```
+
 ## Quick Start
 
 ```bash
@@ -31,14 +66,44 @@ pip install -e ./mongomcp
 # 3. Install top-level dependencies
 pip install -r requirements.txt
 
-# 4. Run the MCP server
-make run-mcp
+# 4. Seed local MongoDB config data and agent identity
+python tools/mongosetup.py
 
-# 5. In a separate terminal, run the Web UI
+# 5. Generate the airbnb vectors
+python tools/embedairbnb.py
+
+# 5. Run the MCP server
+fastapi run mongo_mcp.py --port 8000
+
+# 6. In a separate terminal install the webui
 pip install -e "./mongomcp[agent]"
 pip install -r webui/requirements.txt
-make run-webui
+
+# 7. Build the front end
+cd webui/frontend
+npm install
+npm run build
+
+# 8. in the webui dir run the web server
+cd ../
+python app.py
 ```
+
+
+## MongoDB database setup
+
+```bash
+python tools/mongosetup.py
+```
+
+- create the `mcp_config` database if it does not exist
+- create the `agent_identities`, `mcp_cache`, and `mcp_tools` collections
+- load `tools/mcp_config.mcp_tools.json` into `mcp_config.mcp_tools`
+- replace each `module_info.url` entry with the current local `settings.mongo_url` value
+- generate a default local JWT for `webui_chatuser`
+- upsert the generated metadata into `mcp_config.agent_identities`
+- print the `AUTH_TOKEN = "..."` line for local settings updates
+
 
 ## Environment Variables
 
@@ -82,6 +147,14 @@ make build-webui     # Web UI only
 ```bash
 make run-mcp         # fastapi on port 8000
 make run-webui       # Flask dev server on port 8001
+```
+
+Equivalent direct commands without `make`:
+
+```bash
+python tools/mongosetup.py
+fastmcp run mongo_mcp.py --transport http --port 8000
+cd webui && python app.py
 ```
 
 ### Run from containers
@@ -147,33 +220,7 @@ The server container installs `mongomcp` only. The WebUI container installs `mon
 
 The MCP server loads its tool definitions from a MongoDB collection at startup. Each document defines a complete server configuration — which database/collection to query, which tools to expose, their parameters, and index names.
 
-See `mongo_mcp_annotations.json` for example configurations. The `MCP_TOOL_NAME` environment variable selects which document to load.
-
-### Configuration document structure
-
-```json
-{
-    "Name": "AirbnbSearch",
-    "module_info": {
-        "title": "Airbnb Listings Search",
-        "description": "Vector and text search over Airbnb listing data.",
-        "database": "sample_airbnb",
-        "collection": "listingsAndReviews"
-    },
-    "tools": {
-        "vector_search": {
-            "description": "Semantic similarity search using AI embeddings.",
-            "index": "listing_vector_index",
-            "required": ["query_text"],
-            "parameters": {
-                "query_text": { "type": "str", "description": "Natural language query." },
-                "limit":      { "type": "int", "default": 10, "constraints": "ge=1, le=50" }
-            },
-            "projection": { "embedding": 0 }
-        }
-    }
-}
-```
+See `tools/mcp_config.mcp_tools.json` for the local bootstrap configuration source. The `MCP_TOOL_NAME` environment variable selects which document to load.
 
 ### Available tool types
 
@@ -184,10 +231,11 @@ See `mongo_mcp_annotations.json` for example configurations. The `MCP_TOOL_NAME`
 | `get_unique_values` | Discover distinct values for any field |
 | `agg_pipeline` | Execute arbitrary aggregation pipelines |
 | `get_collection_info` | Collection metadata, indexes, and schema |
+| `geospatial_search` | Geo near queries against geospatial points |
 
 ---
 
-## MongoDB Secrets Manager Secret
+## MongoDB Secrets Manager Secret 
 
 The `MONGO_CREDS` secret should contain:
 
@@ -206,10 +254,10 @@ The `MONGO_CREDS` secret should contain:
 To connect a local IDE MCP client to the running server, start it with SSE transport:
 
 ```bash
-fastmcp run mongo_mcp.py --transport sse --port 8001
+fastmcp run mongo_mcp.py --port 8000
 ```
 
-Then point your client at `http://localhost:8001/sse`.
+Then point your client at `http://localhost:8000/sse`.
 
 ---
 
@@ -219,4 +267,5 @@ Then point your client at `http://localhost:8001/sse`.
 - **Tool discovery empty**: check `MCP_TOOL_NAME` matches a document `Name` field in your config collection
 - **Vector dimension mismatch**: embedding dimensions in your index must match the model output (`amazon.titan-embed-text-v2:0` → 1024)
 - **Container can't reach MCP server**: when running WebUI container locally, set `MONGO_MCP_ROOT=http://host.docker.internal:8000`
+- **Any error with an IP address**: connection to MongoDB is not working. check network, or credentials.
 

@@ -26,9 +26,10 @@ from .mongo_mcp_middleware import MongoMCPMiddleware
 from .bedrock_client import BedrockClient, ServerBedrockClient
 from .mongo_token_verifier import MongoTokenVerifier
 from .mongodb_client import MongoDBClient
+from .memory import register_memory_tools, get_memory_bedrock_toolspecs
 
 # Package version
-__version__ = "2.0.2"
+__version__ = "3.0.2"
 
 # Expose main classes at package level
 __all__ = [
@@ -38,4 +39,5 @@ __all__ = [
    "ServerBedrockClient",
    "MongoTokenVerifier",
    "MongoDBClient",
+   "register_memory_tools",
 ]

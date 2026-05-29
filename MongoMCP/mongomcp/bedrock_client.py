@@ -11,12 +11,14 @@ import time
 import traceback
 from typing import Any, Callable, Dict, List, Optional
 import logging
+import httpx
 import boto3
 from botocore.config import Config as BotoConfig
 from botocore.exceptions import ClientError
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 class DateTimeEncoder(json.JSONEncoder):
@@ -74,6 +76,52 @@ class BedrockClient:
         except Exception:
             # Progress updates should never fail the main LLM flow.
             return
+
+    @staticmethod
+    def _estimate_text_tokens(text: str) -> int:
+        """Rough text-to-token estimate used for overflow preflight."""
+        if not text:
+            return 0
+        return max(1, (len(text) + 3) // 4)
+
+    def _estimate_content_tokens(self, content: Any) -> int:
+        """Estimate token footprint of a Bedrock content payload."""
+        if isinstance(content, str):
+            return self._estimate_text_tokens(content)
+        if isinstance(content, list):
+            return sum(self._estimate_content_tokens(item) for item in content)
+        if isinstance(content, dict):
+            text = content.get("text")
+            if isinstance(text, str):
+                return self._estimate_text_tokens(text)
+            return self._estimate_text_tokens(json.dumps(content, ensure_ascii=False, default=str))
+        return self._estimate_text_tokens(str(content))
+
+    def _estimate_messages_tokens(self, messages: List[Dict[str, Any]]) -> int:
+        """Estimate tokens for all current conversation messages."""
+        total = 0
+        for msg in messages or []:
+            total += 6  # per-message overhead
+            total += self._estimate_content_tokens(msg.get("content", []))
+        return total
+
+    def _estimate_system_tokens(self) -> int:
+        """Estimate tokens for current system prompt blocks."""
+        return self._estimate_content_tokens(self.system or [])
+
+    def _estimate_total_context_tokens(self, messages: List[Dict[str, Any]]) -> int:
+        """Estimate total context size for the next model call."""
+        return self._estimate_system_tokens() + self._estimate_messages_tokens(messages)
+
+    @staticmethod
+    def _tool_overflow_notice(tool_name: str, estimated_added_tokens: int, current_tokens: int, max_tokens: int) -> str:
+        """Return overflow-safe tool message with paging guidance."""
+        return (
+            f"Tool '{tool_name}' executed successfully, but the full result was omitted because it would overflow "
+            f"the model context (current~{current_tokens}, add~{estimated_added_tokens}, max={max_tokens}). "
+            "Please rework the request to page results into smaller chunks and use the memory layer to store and "
+            "retrieve those chunks across turns."
+        )
 
     def manage_bedrock_cache_points(self, messages: List[Dict[str, Any]], max_cache_points: int = 4) -> int:
         """
@@ -252,6 +300,9 @@ class BedrockClient:
                 }
                 if self.system is not None:
                     converse_input["system"] = self.system
+                else:
+                    if iteration == 0:
+                        logger.warning("invoke_bedrock_with_tools: NO system prompt set on this client")
 
                 t0 = time.monotonic()
                 response = self.bedrock_client.converse(**converse_input)
@@ -269,6 +320,7 @@ class BedrockClient:
                 else:
                     for k,v in itt_used.items(): usage[k] += v
                 return_obj["usage"] = usage
+                return_obj["usage_last"] = itt_used
 
                 # Get the assistant's response
                 assistant_message = response['output']['message']                
@@ -305,6 +357,11 @@ class BedrockClient:
                     # If there are tool calls, execute them
                     if tool_calls:
                         tool_results = []
+                        max_context_tokens = int(getattr(self.settings, "LLM_MAX_CONTEXT_TOKENS", 200000))
+                        current_usage_tokens = int((itt_used or {}).get("inputTokens", 0)) + int((itt_used or {}).get("outputTokens", 0))
+                        estimated_context_tokens = self._estimate_total_context_tokens(messages)
+                        context_baseline_tokens = max(current_usage_tokens, estimated_context_tokens)
+                        projected_additional_tokens = 0
                         
                         for tool_req in tool_calls:
                             tool_name = tool_req['name']
@@ -316,10 +373,43 @@ class BedrockClient:
                                 tool_result = await self._call_mcp_tool(tool_name, tool_input)
                                 result_len = len(str(tool_result))
                                 self._emit_progress(self.message_handler, f"Tool {tool_name} returned {result_len} chars", status="Tool Complete")
+                                tool_result_text = str(tool_result)
+                                candidate_block = {
+                                    "toolResult": {
+                                        "toolUseId": tool_use_id,
+                                        "content": [{"text": tool_result_text}],
+                                    }
+                                }
+                                added_tokens = 6 + self._estimate_content_tokens(candidate_block)
+                                projected_total_tokens = context_baseline_tokens + projected_additional_tokens + added_tokens
+
+                                # If full tool output would overflow model context, do not append it.
+                                # Return only a compact success+overflow notice to keep the turn valid.
+                                if projected_total_tokens > max_context_tokens:
+                                    self._emit_progress(
+                                        self.message_handler,
+                                        f"Tool result for {tool_name} would overflow context; sending overflow notice only",
+                                        status="Tool Overflow",
+                                    )
+                                    tool_result_text = self._tool_overflow_notice(
+                                        tool_name=tool_name,
+                                        estimated_added_tokens=added_tokens,
+                                        current_tokens=context_baseline_tokens + projected_additional_tokens,
+                                        max_tokens=max_context_tokens,
+                                    )
+                                    candidate_block = {
+                                        "toolResult": {
+                                            "toolUseId": tool_use_id,
+                                            "content": [{"text": tool_result_text}],
+                                        }
+                                    }
+                                    added_tokens = 6 + self._estimate_content_tokens(candidate_block)
+
+                                projected_additional_tokens += added_tokens
                                 tool_results.append({
                                     "toolResult": {
                                         "toolUseId": tool_use_id,
-                                        "content": [{"text": str(tool_result)}]
+                                        "content": [{"text": tool_result_text}]
                                     }
                                 })
                             except Exception as e:
@@ -341,10 +431,24 @@ class BedrockClient:
                             messages.append(tool_message)              
                             return_obj["history"] = messages
                             total_result_chars = sum(len(str(tr)) for tr in tool_results)
+                            tool_block_context_tokens = self._estimate_total_context_tokens(messages)
+                            tool_block_percent = (tool_block_context_tokens / max(1, max_context_tokens)) * 100
+                            tool_block_input = int((itt_used or {}).get("inputTokens", 0) or 0)
+                            tool_block_output = int((itt_used or {}).get("outputTokens", 0) or 0)
+                            tool_block_total = tool_block_input + tool_block_output
                             self._emit_progress(
                                 self.message_handler,
                                 f"Sending {len(tool_results)} tool result(s) ({total_result_chars} chars) back to Bedrock...",
                                 status="Tool Results",
+                            )
+                            self._emit_progress(
+                                self.message_handler,
+                                (
+                                    "Token usage after tool block - "
+                                    f"input: {tool_block_input}, output: {tool_block_output}, total: {tool_block_total}, "
+                                    f"context_estimate: {tool_block_context_tokens}, used: {tool_block_percent:.1f}%"
+                                ),
+                                status="Token Usage",
                             )
                             continue  # Continue the conversation loop
                     
@@ -365,9 +469,19 @@ class BedrockClient:
                 
             except ClientError as error:
                 error_code = error.response['Error']['Code']
-                logger.error(f"Bedrock error: {error_code} - {error.response['Error']['Message']}")
+                error_msg = error.response['Error']['Message']
+                logger.error(f"Bedrock error: {error_code} - {error_msg}")
                 if error_code == 'ValidationException':
-                    return_obj["error"] = f"Input validation failed {error.response['Error']['Message']}"
+                    # Corrupt conversation state: toolUse without a matching toolResult.
+                    # Signal callers to clear history so the next request starts fresh.
+                    if 'toolResult' in error_msg or 'toolUse' in error_msg:
+                        logger.error("Conversation history is corrupt (missing toolResult). Clearing history.")
+                        messages.clear()
+                        return_obj["history"] = []
+                        return_obj["clear_history"] = True
+                        return_obj["error"] = "Conversation history was corrupt and has been cleared. Please try again."
+                    else:
+                        return_obj["error"] = f"Input validation failed {error_msg}"
                 elif error_code in ['ExpiredTokenException', 'ExpiredToken']:
                     raise Exception("credentials have expired", error)
                 else:
@@ -407,33 +521,102 @@ class BedrockClient:
             traceback.print_exc()
             raise
 
-    async def generate_embedding(self, text: str) -> list:
+    async def generate_embedding(self, text: str, model_id: Optional[str] = None) -> list:
         """Generates an embedding for the input text using the given model.
         
         Args:
             text: Input text to embed.
+            model_id: The ID of the model to use. Defaults to self.settings.EMBEDDING_MODEL_ID.
+                      Routes to Voyage AI for "voyage-*" models, Bedrock for "amazon.*" models.
         
         Returns:
             list: Embedding vector (list of floats) produced by the model.
         """
-        body = json.dumps({"inputText": text})        
-        # Invoke the Bedrock embedding model (e.g., Titan Embeddings) specified in config
+        if model_id is None:
+            model_id = self.settings.EMBEDDING_MODEL_ID
+
+        if model_id.startswith("voyage-"):
+            return await self.generate_voyage_embeddings(text, model_id=model_id)
+
+        logger.info(f"Generating embedding using Bedrock model {model_id} for input text of length {len(text)}")
+        # amazon.* — use Bedrock
+        body = json.dumps({"inputText": text})
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(
             None,
             lambda: self.bedrock_client.invoke_model(
-                modelId= self.settings.EMBEDDING_MODEL_ID, #"amazon.titan-embed-text-v2:0",
+                modelId=model_id,
                 contentType="application/json",
                 accept="application/json",
                 body=body
             )
-        )
+        )   
         # Parse the response and extract the embedding vector
-        return json.loads(response["body"].read())["embedding"]
+        data = json.loads(response["body"].read())
+        return {
+            "embedding_model": model_id,
+            "vector": data["data"][0]["embedding"]
+        }
+
+
+    async def generate_voyage_embeddings(self, text: str, model_id: Optional[str] = None, is_query: bool = True) -> list:
+        """Generates an embedding for the input text using the Voyage AI API.
+        
+        Args:
+            text: Input text to embed.
+            model_id: Voyage model to use. Defaults to self.settings.EMBEDDING_MODEL_ID.
+            is_query: Whether the embedding is for a query. Defaults to True.
+        
+        Returns:
+            list: Embedding vector (list of floats) produced by the model.
+        """
+        api_key = self.settings.mongo_voyage_apikey()
+        if is_query:
+            model_id = self.settings.QUERY_EMBEDDING_MODEL_ID   
+        if model_id is None:                                     
+            model_id = self.settings.EMBEDDING_MODEL_ID
+        if not model_id.startswith("voyage-"):
+            logger.info(f"Model ID {model_id} for generate_voyage_embeddings is not a Voyage model. Defaulting to {model_id}.")
+            model_id = "voyage-4"  # default to voyage-4 if not specified or incorrectly specified
+            
+        
+        # voyage distinguishes between query and document embeddings for better performance
+        input_type = "query" if is_query else "document"
+        
+        logger.info(f"Using {input_type} embedding model: {model_id}")
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://ai.mongodb.com/v1/embeddings",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "input": text,
+                    "model": model_id,
+                    "input_type": input_type
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+        return {
+            "embedding_model": model_id,
+            "vector": data["data"][0]["embedding"]
+        }
+
 
 
 class ServerBedrockClient(BedrockClient):
     """Server-side Bedrock client with prompt/context input formatting."""
+
+    def __init__(self, settings):
+        super().__init__(settings)
+        instructions = getattr(settings, "agent_instructions", "")
+        if instructions:
+            self.system = [{"text": instructions}]
+        else:
+            logger.warning("ServerBedrockClient: agent_instructions EMPTY — system prompt NOT set")
 
     def _format_invoke_request(
         self,

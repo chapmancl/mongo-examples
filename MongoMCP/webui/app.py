@@ -16,6 +16,25 @@ app = Flask(__name__, static_folder=os.path.join(os.path.dirname(__file__), 'fro
 CORS(app)
 
 processor = APIQueryProcessor()
+_site_warmup_lock = threading.Lock()
+_site_warmup_done = False
+
+
+def _warmup_tool_discovery_once() -> None:
+    """Run MCP tool discovery once on first site load."""
+    global _site_warmup_done
+    if _site_warmup_done:
+        return
+    with _site_warmup_lock:
+        if _site_warmup_done:
+            return
+        try:
+            # Triggers processor initialization path and exposes discovered config.
+            processor.get_mcp_config()
+            _site_warmup_done = True
+        except Exception:
+            # Do not block initial page load on warmup failure.
+            traceback.print_exc()
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -41,25 +60,12 @@ def api_query():
         if not q:
             raise ValueError("Empty input")
 
-        req = QueryRequest(input=q, history=payload.get("history", []))  # Validate input with Pydantic model
-        # Mirror CLI commands
+        req = QueryRequest(input=q, history=payload.get("history", []), user_id=payload.get("user_id"), session_id=payload.get("session_id"))
         if q.startswith("clear history"):
-            resp = processor.clear_history().json()    
+            resp = processor.clear_history().json()
             code = 205
-        elif q.startswith("clear cache"):
-            resp = processor.clear_all_caches().json()
-            code = 205
-        elif q.startswith("clear all"):                        
-            processor.get_cache_stats()
-            processor.clear_history()
-            resp = processor.clear_all_caches().json()
-            code = 205
-        elif q.startswith("cache stats"):
-            resp = processor.get_cache_stats().json() 
-            code = 200
         else:
-            # Normal question => forward to LLM/Bedrock with MCP tools
-            resp = processor.query_with_mcp_tools(req).json()    
+            resp = processor.query_with_mcp_tools(req).json()
             code = 200
 
     except Exception as e:
@@ -109,13 +115,34 @@ def get_history():
 
 @app.route('/pattern/save', methods=['POST'])
 def save_pattern():
-    """Save the routing pattern from the last query into the pattern cache."""
+    """Save the current interaction as a reusable query pattern."""
     try:
         if processor.init_error:
             raise ValueError(f"Processor initialization failed: {processor.init_error}")
+        payload = request.get_json(force=True) or {}
+        user_id = (payload.get("user_id") or "").strip()
+        session_id = (payload.get("session_id") or "").strip()
+        resp = processor.save_pattern(user_id, session_id)
+        return jsonify(resp.json()), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify(QueryResponse(status="Error", error=str(e)).json()), 500
 
-        resp = processor.save_pattern().json()
-        return jsonify(resp), 200
+
+@app.route('/feedback', methods=['POST'])
+def record_feedback():
+    """Record user feedback (positive/negative) on the last interaction."""
+    try:
+        if processor.init_error:
+            raise ValueError(f"Processor initialization failed: {processor.init_error}")
+        payload = request.get_json(force=True)
+        user_id = (payload.get("user_id") or "").strip()
+        session_id = (payload.get("session_id") or "").strip()
+        feedback = (payload.get("feedback") or "").strip()
+        if not user_id or not session_id or feedback not in ("positive", "negative"):
+            return jsonify({"error": "user_id, session_id, and feedback (positive|negative) required"}), 400
+        resp = processor.record_feedback(user_id, session_id, feedback)
+        return jsonify(resp.json()), 200
     except Exception as e:
         traceback.print_exc()
         return jsonify(QueryResponse(status="Error", error=str(e)).json()), 500
@@ -161,38 +188,15 @@ def generate(payload):
         result = None
         exception = None
         
-        # Mirror CLI commands
         if q.startswith("clear history"):
             for item in execute_in_thread(processor.clear_history):
                 if isinstance(item, tuple):
                     result, exception = item
                 else:
                     yield item
-        elif q.startswith("clear cache"):
-            for item in execute_in_thread(processor.clear_all_caches):
-                if isinstance(item, tuple):
-                    result, exception = item
-                else:
-                    yield item
-        elif q.startswith("clear all"):
-            processor.clear_history()  # Clear history first to avoid interleaving messages from cache stats            
-            for item in execute_in_thread(processor.clear_all_caches):
-                if isinstance(item, tuple):
-                    result, exception = item
-                else:
-                    yield item
-        elif q.startswith("cache stats"):
-            for item in execute_in_thread(processor.get_cache_stats):
-                if isinstance(item, tuple):
-                    result, exception = item
-                else:
-                    yield item
         else:
-            # Yield progress update
             yield QueryResponse(status='querying', message='Querying Claude with MCP tools...').json() + '\n'
-
-            # Run the query in a background thread to allow concurrent message streaming
-            req = QueryRequest(input=q, history=payload.get("history", []))
+            req = QueryRequest(input=q, history=payload.get("history", []), user_id=payload.get("user_id"), session_id=payload.get("session_id"))
             for item in execute_in_thread(lambda: processor.query_with_mcp_tools(req)):
                 if isinstance(item, tuple):
                     result, exception = item
@@ -213,11 +217,12 @@ def generate(payload):
 @app.route('/<path:path>')
 def serve(path):
     static_folder = app.static_folder
-    print(static_folder)
+    app.logger.debug("serve: static_folder=%s", static_folder)
     if path != "" and os.path.exists(os.path.join(static_folder, path)):
         return send_from_directory(static_folder, path)
     index_path = os.path.join(static_folder, 'index.html')
     if os.path.exists(index_path):
+        _warmup_tool_discovery_once()
         return send_from_directory(static_folder, 'index.html')
     return "Frontend not found. you must first build the project.", 404
 

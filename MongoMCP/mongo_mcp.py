@@ -1,5 +1,6 @@
 import json
 import os
+from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional, Annotated
 import logging
 from pydantic import Field
@@ -9,6 +10,7 @@ from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastmcp.server.dependencies import AccessToken, get_access_token
 from starlette.responses import JSONResponse
+
 USE_LOCAL_MODE = os.getenv('USE_LOCAL_MODE', 'false').lower() == "true"
 
 if USE_LOCAL_MODE:
@@ -17,13 +19,16 @@ if USE_LOCAL_MODE:
 else:
     # Running with kubernetes in EKS/Fargate
     from AWS_settings import settings as settings
-from mongomcp import MongoDBQueryServer, MongoMCPMiddleware, ServerBedrockClient, MongoTokenVerifier, __version__ as MCP_VERSION
+
+#from local_settings import settings # change this to use AWS_settings
+from mongomcp import MongoDBQueryServer, MongoMCPMiddleware, ServerBedrockClient, MongoTokenVerifier, register_memory_tools, get_memory_bedrock_toolspecs, __version__ as MCP_VERSION
 from mongomcp.agent.tool_router import ToolRouter
 import traceback
 import sys
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 """
@@ -75,10 +80,14 @@ def setup_from_mongo():
         sys.exit(1)
 
 setup_from_mongo()
+
 # Create FastMCP server instance with bearer token authentication
 mcp = FastMCP("mongodb-vector-server", auth=auth_provider)
 mcp.add_middleware(mongo_middleware)
 llm_client = ServerBedrockClient(settings)
+# Separate FastMCP instance for the memory layer — keeps memory tools off the main tool catalog.
+memory_mcp = FastMCP("memory-server", auth=auth_provider, instructions=_agent_instructions or None)
+_memory_dispatch = register_memory_tools(memory_mcp, mongo_server, llm_client, settings)
 
 @mcp.tool()
 async def upsert_document(
@@ -140,7 +149,7 @@ async def vector_search(
         #TODO: validate collection exists and matches tool config, validate vector index exists on collection
 
         # incoming input is text, we need a vector for search. Use the LLM client to generate the embedding
-        vector_qry = await llm_client.generate_embedding(query_text)  
+        vector_qry = await llm_client.generate_embedding(query_text)          
         results = await mongo_server.vector_search(collection, vector_qry, filters, limit, num_candidates)
         jobj = json.dumps(results, default=str)  # serialize results to JSON string... sometime results don't auto-serialize well so do it now
         return {
@@ -346,7 +355,17 @@ async def aggregate_query(
 # We have our tools, mount the mcp to fastapi and setup our fastapi authentication
 # everything after this should be FastAPI endpoints.
 mcp_app = mcp.http_app(path=f"/mcp")
-app = FastAPI(title=settings.TOOL_NAME, lifespan=mcp_app.lifespan)
+memory_app = memory_mcp.http_app(path="/mcp")
+
+
+@asynccontextmanager
+async def _combined_lifespan(app):
+    async with mcp_app.lifespan(app):
+        async with memory_app.lifespan(app):
+            yield
+
+
+app = FastAPI(title=settings.TOOL_NAME, lifespan=_combined_lifespan)
 security_token = HTTPBearer()
 optional_token = HTTPBearer(auto_error=False)
 
@@ -375,17 +394,13 @@ async def get_optional_token(
 ):
     return verify_optional_token(credentials)
 
-# Dispatch table: tool name → .fn reference. Add new tools here when registered with @mcp.tool().
-'''
-_TOOL_DISPATCH = {
-    "upsert_document":    upsert_document.fn,
-    "vector_search":      vector_search.fn,
-    "text_search":        text_search.fn,
-    "geospatial_search":  geospatial_search.fn,
-    "get_unique_values":  get_unique_values.fn,
-    "get_collection_info": get_collection_info.fn,
-    "aggregate_query":    aggregate_query.fn,
-}
+
+def _resolve_tool_callable(tool_obj):
+    """Return the underlying callable for either FastMCP tool wrappers or plain functions."""
+    return getattr(tool_obj, "fn", tool_obj)
+
+# Dispatch table: tool name → callable. Add new tools here when registered with @mcp.tool().
+
 '''
 
 _TOOL_DISPATCH = {
@@ -397,17 +412,24 @@ _TOOL_DISPATCH = {
     "get_collection_info": get_collection_info,
     "aggregate_query":    aggregate_query,
 }
+'''
 
 async def tool_handler(token: AccessToken, toolname: str, tool_input: dict) -> dict:
     """Map toolname to the appropriate MCP tool function and execute it."""
-    fn = _TOOL_DISPATCH.get(toolname)
+    fn = TOOL_DISPATCH.get(toolname)
     if fn is None:
         return {"error": f"Unknown tool: {toolname}"}
     try:
         kwargs = dict(tool_input)
         if toolname == "upsert_document":
             kwargs["token"] = token
-        return await fn(**kwargs)
+        if toolname == "get_instructions":
+            logger.info("[PIPELINE] tool_handler: calling get_instructions, fn type=%s, fn=%r, qualname=%s",
+                        type(fn).__name__, fn, getattr(fn, "__qualname__", "?"))
+        result = await fn(**kwargs)
+        if toolname == "get_instructions":
+            logger.info("[PIPELINE] tool_handler: get_instructions result=%r", result)
+        return result
     except Exception as e:
         logger.error(f"Tool handler error for {toolname}: {e}")
         logger.debug("".join(traceback.format_exception(None, e, e.__traceback__)))
@@ -418,11 +440,14 @@ async def tool_handler(token: AccessToken, toolname: str, tool_input: dict) -> d
 async def root_endpoint(token: Annotated[str | None, Depends(get_optional_token)]) -> Dict[str, Any]:
     """Root endpoint"""
     if token:
+        active_tools = mongo_middleware.active_endpoints
+        if "memory" not in active_tools:
+            active_tools = [*active_tools, "memory"]
         return {
             "message": "MongoDB Vector Server MCP",
             "status": "running",
             "version": MCP_VERSION,
-            "available_tools": mongo_middleware.active_endpoints,
+            "available_tools": active_tools,
             "available_endpoints": [
                 f"GET  /{settings.TOOL_NAME}/health",                
                 f"GET  /{settings.TOOL_NAME}/collection_info",
@@ -430,6 +455,7 @@ async def root_endpoint(token: Annotated[str | None, Depends(get_optional_token)
                 f"POST /{settings.TOOL_NAME}/route",
                 f"GET  /{settings.TOOL_NAME}/reset",
                 f"POST /{settings.TOOL_NAME}/prompt/{{prompt_name}}",
+                "GET  /memory/mcp  (memory layer — always available)",
                 "GET  /tools_config",
                 "POST /vectorize",
             ]
@@ -464,21 +490,50 @@ async def http_health_check(token: Annotated[str | None, Depends(get_optional_to
 @app.get("/tools_config")
 async def http_get_tools_config(token: Annotated[str, Depends(get_token)]) -> Dict[str, Any]:
     """Regular HTTP GET endpoint for tools config"""
-    return {"available_tools": mongo_middleware.active_endpoints, "tool_name": settings.TOOL_NAME}
+    active = mongo_middleware.refresh_active_endpoints()
+    if "memory" not in active:
+        active = [*active, "memory"]
+    return {"available_tools": active, "tool_name": settings.TOOL_NAME}
 
 @app.get(f"/{settings.TOOL_NAME}/collection_info")
 async def http_get_collection_info(token: Annotated[str, Depends(get_token)]) -> Dict[str, Any]:
     """Regular HTTP GET endpoint for collection info"""        
+<<<<<<< HEAD
     #results = await get_collection_info.fn()
     results = await get_collection_info()
+=======
+    results = await _resolve_tool_callable(get_collection_info)()
+>>>>>>> 4e9bf596d06a8946007ef3a8d6feeea0741bf060
     return {"collection_info": results}
 
 
 @app.get(f"/{settings.TOOL_NAME}/llm_tools")
 async def http_get_llm_tools(token: Annotated[str, Depends(get_token)]) -> Dict[str, Any]:
-    """Returns preformatted Bedrock toolSpec JSON for all active tools with MongoDB annotations applied."""
+    """Returns preformatted Bedrock toolSpec JSON for the active tool endpoint (MongoDB annotations)."""
     tools = mongo_middleware.build_tools_from_annotations()
     return {"tools": tools, "count": len(tools)}
+
+
+@app.get("/memory/llm_tools")
+async def http_get_memory_llm_tools(token: Annotated[str, Depends(get_token)]) -> Dict[str, Any]:
+    """Returns preformatted Bedrock toolSpec JSON for all memory layer tools."""
+    tools = get_memory_bedrock_toolspecs()
+    return {"tools": tools, "count": len(tools)}
+
+
+@app.get("/memory/collection_info")
+async def http_get_memory_collection_info(token: Annotated[str, Depends(get_token)]) -> Dict[str, Any]:
+    """Returns module-level description for the memory layer (no collection stats)."""
+    module_info = (mongo_middleware.ANNOTATIONS or {}).get("module_info", {})
+    return {
+        "tool_name": "memory",
+        "title": "Mongo Memory Layer",
+        "description": "Self-curating persistent memory system with semantic search, graph linking, and shard scan. Always available on every container.",
+        "database": getattr(settings, "memory_db", "mcp_config"),
+        "collections": ["memory_episodic", "memory_semantic"],
+        "tools": [t["toolSpec"]["name"] for t in get_memory_bedrock_toolspecs()],
+        "version": MCP_VERSION,
+    }
 
 
 @app.post(f"/{settings.TOOL_NAME}/route")
@@ -635,11 +690,12 @@ async def vectorize_text(body: Dict[str, Any],
         if not text_chunk or not isinstance(text_chunk, str):
             raise Exception("textChunk must be a non-empty string in the request body")
         
-        vector = await llm_client.generate_embedding(text_chunk)
+        vector_info = await llm_client.generate_embedding(text_chunk)
         logger.info(f"Vectorization successful for input text of length {len(text_chunk)}")
         return {
             "input_text": text_chunk,
-            "vector": vector
+            "embedding_model": vector_info["embedding_model"],
+            "vector": vector_info["vector"]
         }
         
     except HTTPException as he:
@@ -654,9 +710,8 @@ async def vectorize_text(body: Dict[str, Any],
             "body" : input
         }
 
-# we now have all the components and routes. mount the MCP server to FastAPI
-# Mount the MCP server
 app.mount(f"/{settings.TOOL_NAME}", mcp_app)
+app.mount("/memory", memory_app)
 
 
 # These are not really used, left them in just in case.

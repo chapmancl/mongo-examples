@@ -177,8 +177,7 @@ class MongoDBQueryServer(MongoDBClient):
             List of search results with similarity scores
         """
         try:
-            await self.ensure_connection()
-
+            await self.ensure_connection()            
             # MongoDB Atlas Vector Search aggregation pipeline
             pipeline = [
                 {
@@ -221,7 +220,7 @@ class MongoDBQueryServer(MongoDBClient):
                 
                 # Inject the filter into the pipeline
                 pipeline[0]["$vectorSearch"]["filter"] = match_filter
-            
+            print(f"Constructed vector search pipeline: {pipeline}")
             results = []
             async for doc in self.get_collection(collection).aggregate(pipeline):
                 results.append(doc)

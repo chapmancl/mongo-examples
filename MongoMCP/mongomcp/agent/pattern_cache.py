@@ -20,6 +20,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import time
 import requests as _requests
 from typing import Any, Dict, List, Optional
@@ -51,14 +52,17 @@ class PatternCache:
     """
 
     _COLLECTION = "mcp_patterns"
+    _LOG_COLLECTION = "mcp_interaction_log"
 
     def __init__(self, settings: Any, tool_scope: Optional[str] = None):
         from ..mongodb_client import MongoDBClient  # noqa: PLC0415
+        from ..bedrock_client import BedrockClient  # noqa: PLC0415
         import copy
 
         local_settings = copy.copy(settings)
         local_settings.mcp_config_col = self._COLLECTION
         self._mongo = MongoDBClient(settings=local_settings)
+        self._bedrock = BedrockClient(settings)
         self._mcp_root: str = getattr(settings, "mongo_mcp_root", "")
         self._auth_token: str = getattr(settings, "AUTH_TOKEN", "")
         self._headers = {
@@ -66,6 +70,7 @@ class PatternCache:
             "Content-Type": "application/json",
         }
         self._indexes_initialized = False
+        self._log_indexes_initialized = False
         self._tool_scope = tool_scope  # scopes patterns to a specific tool config
 
     # ------------------------------------------------------------------
@@ -98,7 +103,7 @@ class PatternCache:
             self._indexes_initialized = True
         return col
 
-    async def _vectorize(self, text: str) -> Optional[List[float]]:
+    async def _vectorize_OLD(self, text: str) -> Optional[List[float]]:
         """Call the MCP /vectorize endpoint and return the embedding vector."""
         if not self._mcp_root:
             return None
@@ -113,6 +118,14 @@ class PatternCache:
             )
             resp.raise_for_status()
             return resp.json().get("vector")
+        except Exception as e:
+            logger.warning(f"PatternCache vectorize failed (embedding skipped): {e}")
+            return None
+
+    async def _vectorize(self, text: str) -> Optional[List[float]]:
+        """Generate an embedding vector for text using Voyage AI via BedrockClient."""
+        try:
+            return await self._bedrock.generate_voyage_embeddings(text=text, is_query=True)
         except Exception as e:
             logger.warning(f"PatternCache vectorize failed (embedding skipped): {e}")
             return None
@@ -179,82 +192,44 @@ class PatternCache:
     async def find_best_match(
         self,
         question: str,
-        similarity_threshold: float = 0.65,
+        similarity_threshold: float = 0.85,
         max_candidates: int = 5,
     ) -> List[Dict[str, Any]]:
         """Find the best matching patterns for a question.
 
-        Returns up to *max_candidates* patterns above *similarity_threshold*,
-        sorted by vector similarity score (descending).  Each dict includes
-        ``score`` and ``hit_count`` so the caller can factor in user-validated
-        popularity when choosing among candidates.
+        Tries $rankFusion (vector + full-text) first; falls back to vector-only
+        if the Atlas Search index is unavailable.  Each candidate is re-ranked
+        with an additive hit_count boost so validated patterns float to the top.
 
-        Returns an empty list on a miss.
+        Returns up to *max_candidates* patterns above *similarity_threshold*,
+        sorted by boosted score (descending).  Returns an empty list on a miss.
         """
         embedding = await self._vectorize(question)
         if embedding is not None:
             col = await self._collection()
-            try:
-                vs_query = {
-                    "index": "pattern_embedding_index",
-                    "path": "embedding",
-                    "queryVector": embedding,
-                    "numCandidates": 20,
-                    "limit": max_candidates,
-                }
-                if self._tool_scope:
-                    vs_query["filter"] = {"tool_scope": self._tool_scope}
-                pipeline = [
-                    {"$vectorSearch": vs_query},
-                    {
-                        "$addFields": {
-                            "score": {"$meta": "vectorSearchScore"},
-                        }
-                    },
-                    {
-                        "$project": {
-                            "pattern": 1,
-                            "tools": 1,
-                            "query_hints": 1,
-                            "output_hint": 1,
-                            "playbook": 1,
-                            "hit_count": 1,
-                            "score": 1,
-                        }
-                    },
-                ]
-                candidates = []
-                async for doc in col.aggregate(pipeline):
-                    score = doc.get("score", 0)
-                    if score >= similarity_threshold:
-                        candidates.append({
-                            "pattern": doc.get("pattern", "?"),
-                            "tools": doc.get("tools", []),
-                            "query_hints": doc.get("query_hints"),
-                            "output_hint": doc.get("output_hint"),
-                            "playbook": doc.get("playbook"),
-                            "hit_count": doc.get("hit_count", 0),
-                            "score": score,
-                        })
-                    else:
-                        logger.info(
-                            f"Pattern cache: '{doc.get('pattern', '?')}' scored {score:.3f}, "
-                            f"below threshold {similarity_threshold}"
-                        )
+            candidates = await self._find_with_rank_fusion(
+                col, question, embedding, similarity_threshold, max_candidates
+            )
+            if candidates is None:
+                # $rankFusion unavailable — fall back to vector-only
+                candidates = await self._find_vector_only(
+                    col, embedding, similarity_threshold, max_candidates
+                )
+                if candidates is not None:
+                    logger.info(f"Pattern cache: $vectorSearch returned {len(candidates)} candidates")
+            else:
+                logger.info(f"Pattern cache: $rankFusion returned {len(candidates)} candidates")
+            if candidates:
+                logger.info(
+                    f"Pattern cache: {len(candidates)} candidate(s) above threshold "
+                    f"[best score={candidates[0].get('boosted_score', candidates[0].get('score', 0)):.3f}, "
+                    f"hits={candidates[0]['hit_count']}]"
+                )
+            else:
+                logger.info("Pattern cache MISS: no candidates above threshold")
+            return candidates
 
-                if candidates:
-                    logger.info(
-                        f"Pattern cache: {len(candidates)} candidate(s) above threshold "
-                        f"[best={candidates[0]['score']:.3f}, hits={candidates[0]['hit_count']}]"
-                    )
-                else:
-                    logger.info("Pattern cache MISS: no candidates above threshold")
-
-                return candidates
-            except Exception as e:
-                logger.warning(f"Vector search on patterns failed: {e}")
-
-        # Fallback: exact pattern hash (only matches if the question was previously stored verbatim)
+        # No embedding — exact hash fallback
         exact = await self.get(question)
         if exact is not None:
             exact["pattern"] = question
@@ -263,10 +238,197 @@ class PatternCache:
             return [exact]
         return []
 
+    async def _find_with_rank_fusion(
+        self,
+        col,
+        question: str,
+        embedding: List[float],
+        similarity_threshold: float,
+        max_candidates: int,
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Run a $rankFusion pipeline combining vector and full-text search.
+
+        Weights: vector=0.7, text=0.3.  Each result is further boosted by a
+        log-normalised hit_count (weight 0.2) so user-validated patterns rank higher.
+
+        Returns a candidate list, or None if $rankFusion is unavailable so the
+        caller can fall back to vector-only search.
+        """
+        scope_filter = {"tool_scope": self._tool_scope} if self._tool_scope else None
+        vector_pipeline: List[Dict] = [
+            {
+                "$vectorSearch": {
+                    "index": "pattern_voyage_index", # "pattern_embedding_index",
+                    "path": "voyage_embedding",  #"embedding",
+                    "queryVector": embedding,
+                    "numCandidates": 20,
+                    "limit": max_candidates * 2,
+                    **({"filter": scope_filter} if scope_filter else {}),
+                }
+            }
+        ]
+        text_pipeline: List[Dict] = [
+            {
+                "$search": {
+                    "index": "fulltext_pattern_index",
+                    "text": {
+                        "query": question,
+                        "path": ["pattern", "example_queries"],
+                    },
+                }
+            },
+            {"$limit": max_candidates * 2},
+        ]
+        if scope_filter and self._tool_scope:
+            text_pipeline[0]["$search"]["filter"] = {
+                "term": {"path": "tool_scope", "value": self._tool_scope}
+            }
+        pipeline = [
+            {
+                "$rankFusion": {
+                    "input": {
+                        "pipelines": {
+                            "vector": vector_pipeline,
+                            "text": text_pipeline,
+                        }
+                    },
+                    "combination": {
+                        "weights": {"vector": 0.7, "text": 0.3},
+                    },
+                }
+            },
+            {"$limit": max_candidates * 2},
+            {
+                "$project": {
+                    "pattern": 1,
+                    "tools": 1,
+                    "query_hints": 1,
+                    "output_hint": 1,
+                    "playbook": 1,
+                    "hit_count": 1,
+                }
+            },
+        ]
+        try:
+            raw: List[Dict] = []
+            async for doc in col.aggregate(pipeline):
+                raw.append(doc)
+
+            if not raw:
+                return []
+
+            # $rankFusion already returns results in best-first order.
+            # Apply a Python-side hit_count boost and re-sort so user-validated
+            # patterns can bubble above equally-ranked newcomers.
+            n = len(raw)
+            candidates = []
+            for rank, doc in enumerate(raw):
+                # Normalise position: rank 0 → 1.0, last → approaching 0.
+                position_score = 1.0 - (rank / max(n, 1))
+                hit_count = doc.get("hit_count", 0)
+                # Patterns with negative hit_count have been flagged as bad by user feedback — skip them.
+                if hit_count < 0:
+                    logger.info(
+                        f"Pattern cache: '{doc.get('pattern', '?')}' rejected (hit_count={hit_count})"
+                    )
+                    continue
+                boost = (math.log(hit_count + 1) / math.log(101)) * 0.2
+                boosted_score = position_score + boost
+                if boosted_score >= similarity_threshold:
+                    candidates.append({
+                        "pattern": doc.get("pattern", "?"),
+                        "tools": doc.get("tools", []),
+                        "query_hints": doc.get("query_hints"),
+                        "output_hint": doc.get("output_hint"),
+                        "playbook": doc.get("playbook"),
+                        "hit_count": hit_count,
+                        "score": position_score,
+                        "boosted_score": boosted_score,
+                    })
+                else:
+                    logger.info(
+                        f"Pattern cache: '{doc.get('pattern', '?')}' position_score={position_score:.3f}, "
+                        f"boost={boost:.3f} (hits={hit_count}), "
+                        f"boosted_score={boosted_score:.3f}, "
+                        f"below threshold {similarity_threshold}"
+                    )
+
+            candidates.sort(key=lambda c: c["boosted_score"], reverse=True)
+            return candidates[:max_candidates]
+        except Exception as e:
+            err = str(e)
+            if "rankFusion" in err or "Unrecognized pipeline stage" in err:
+                logger.warning(f"$rankFusion unavailable, falling back to vector-only: {e}")
+                return None
+            logger.warning(f"$rankFusion search failed: {e}")
+            return None
+
+    async def _find_vector_only(
+        self,
+        col,
+        embedding: List[float],
+        similarity_threshold: float,
+        max_candidates: int,
+    ) -> List[Dict[str, Any]]:
+        """Vector-only fallback when $rankFusion is unavailable."""
+        vs_query: Dict[str, Any] = {
+            "index": "pattern_embedding_index",
+            "path": "embedding",
+            "queryVector": embedding,
+            "numCandidates": 5,
+            "limit": max_candidates,
+        }
+        if self._tool_scope:
+            vs_query["filter"] = {"tool_scope": self._tool_scope}
+        pipeline = [
+            {"$vectorSearch": vs_query},
+            {"$addFields": {"score": {"$meta": "vectorSearchScore"}}},
+            {
+                "$project": {
+                    "pattern": 1,
+                    "tools": 1,
+                    "query_hints": 1,
+                    "output_hint": 1,
+                    "playbook": 1,
+                    "hit_count": 1,
+                    "score": 1,
+                }
+            },
+        ]
+        candidates = []
+        try:
+            async for doc in col.aggregate(pipeline):
+                score = doc.get("score", 0)
+                hit_count = doc.get("hit_count", 0)
+                # Patterns with negative hit_count have been flagged as bad by user feedback — skip them.
+                if hit_count < 0:
+                    logger.info(
+                        f"Pattern cache: '{doc.get('pattern', '?')}' rejected (hit_count={hit_count})"
+                    )
+                    continue
+                if score >= similarity_threshold:
+                    candidates.append({
+                        "pattern": doc.get("pattern", "?"),
+                        "tools": doc.get("tools", []),
+                        "query_hints": doc.get("query_hints"),
+                        "output_hint": doc.get("output_hint"),
+                        "playbook": doc.get("playbook"),
+                        "hit_count": doc.get("hit_count", 0),
+                        "score": score,
+                    })
+                else:
+                    logger.info(
+                        f"Pattern cache: '{doc.get('pattern', '?')}' score={score:.3f}, "
+                        f"below threshold {similarity_threshold}"
+                    )
+        except Exception as e:
+            logger.warning(f"Vector search on patterns failed: {e}")
+        return candidates
+
     async def find_similar_pattern(
         self,
         pattern: str,
-        similarity_threshold: float = 0.85,
+        similarity_threshold: float = 0.75,
     ) -> Optional[str]:
         """Check if a semantically similar pattern already exists.
 
@@ -366,7 +528,7 @@ class PatternCache:
         if playbook is not None:
             doc["playbook"] = playbook
         if embedding is not None:
-            doc["embedding"] = embedding
+            doc["voyage_embedding"] = embedding
         await col.update_one(
             {"pattern_hash": phash},
             {
@@ -380,6 +542,120 @@ class PatternCache:
         """Drop all routing patterns (destructive — use with care)."""
         col = await self._collection()
         await col.delete_many({})
+
+    # ------------------------------------------------------------------
+    #  Interaction log — one document per browser user_id, interactions array
+    # ------------------------------------------------------------------
+
+    async def _log_collection(self):
+        """Return the interaction log collection, ensuring the compound (user_id, session_id) index exists."""
+        await self._mongo.ensure_connection()
+        col = self._mongo.get_collection(self._LOG_COLLECTION)
+        if not self._log_indexes_initialized:
+            try:
+                existing = await col.index_information()
+                if "mcp_interaction_log_uid_sid" not in existing:
+                    await col.create_index(
+                        [("user_id", 1), ("session_id", 1)],
+                        unique=True,
+                        name="mcp_interaction_log_uid_sid",
+                    )
+            except Exception as e:
+                logger.warning(f"Could not create interaction_log index: {e}")
+            self._log_indexes_initialized = True
+        return col
+
+    @staticmethod
+    def _extract_tool_calls_from_history(history: list) -> List[Dict[str, Any]]:
+        """Pull tool name + input from Bedrock toolUse blocks in history."""
+        calls = []
+        for msg in history:
+            if msg.get("role") != "assistant":
+                continue
+            for block in msg.get("content", []):
+                if "toolUse" in block:
+                    tu = block["toolUse"]
+                    calls.append({"tool_name": tu.get("name", ""), "tool_input": tu.get("input", {})})
+        return calls
+
+    async def log_interaction(
+        self,
+        user_id: str,
+        session_id: str,
+        question: str,
+        history: list,
+        response_text: str,
+        outcome: str,
+        pattern_matched: Optional[str] = None,
+        pattern_hash: Optional[str] = None,
+        tools_selected: Optional[List[str]] = None,
+    ) -> None:
+        """Upsert the single per-session interaction document.
+
+        One document per (user_id, session_id).  Each call appends the
+        new question to the ``questions`` array and overwrites the tool,
+        response, and pattern fields with the latest values — all in one
+        atomic update so follow-up questions within a session stay together.
+        """
+        try:
+            col = await self._log_collection()
+            await col.update_one(
+                {"user_id": user_id, "session_id": session_id},
+                {
+                    "$setOnInsert": {
+                        "user_id": user_id,
+                        "session_id": session_id,
+                        "created_at": time.time(),
+                        "feedback": None,
+                    },
+                    "$push": {
+                        "questions": question,
+                        "responses": response_text[:500] + ("\u2026" if len(response_text) > 500 else ""),
+                    },
+                    "$set": {
+                        "tool_calls": self._extract_tool_calls_from_history(history),
+                        "tools_selected": tools_selected or [],
+                        "outcome": outcome,
+                        "pattern_matched": pattern_matched,
+                        "pattern_hash": pattern_hash,
+                        "updated_at": time.time(),
+                    },
+                },
+                upsert=True,
+            )
+        except Exception as e:
+            logger.warning(f"log_interaction failed: {e}")
+
+    async def record_feedback(self, user_id: str, session_id: str, feedback: str) -> bool:
+        """Record user feedback on the session document and penalise the pattern on negative signal.
+
+        Targets the session document directly via (user_id, session_id) —
+        no positional index is needed since there is one document per session.
+        """
+        if feedback not in ("positive", "negative"):
+            return False
+        try:
+            col = await self._log_collection()
+            result = await col.find_one_and_update(
+                {"user_id": user_id, "session_id": session_id},
+                {"$set": {"feedback": feedback, "feedback_at": time.time()}},
+                return_document=True,
+                projection={"pattern_hash": 1},
+            )
+            if result is None:
+                return False
+            if feedback == "negative":
+                ph = result.get("pattern_hash")
+                if ph:
+                    patterns_col = await self._collection()
+                    await patterns_col.update_one(
+                        {"pattern_hash": ph},
+                        {"$inc": {"hit_count": -1}},
+                    )
+            return True
+        except Exception as e:
+            logger.warning(f"record_feedback failed: {e}")
+            return False
 
     async def record(
         self,

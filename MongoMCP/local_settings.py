@@ -15,7 +15,9 @@ class LocalSettings:
         self.LLM_MODEL_ID = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
         self.LLM_MAX_ITERATIONS = int(os.getenv('LLM_MAX_ITERATIONS', '15'))
         self.ENABLE_CACHE_POINTS = os.getenv('ENABLE_CACHE_POINTS', 'true').lower() in ['1', 'true', 'yes', 'on']
-        self.ENABLE_BEDROCK_CACHING = True       
+        self.ENABLE_BEDROCK_CACHING = True 
+        self.voyage_api_key = "al-o2jPQkbx_U8mt6x-hVvypRMhIzUa5FdluzZ31rW7Qze"
+        self.voyage_model = "voyage-3.5"     
         
         # Hardcoded credentials for local development only.
         self._credentials: Dict[str, str] = {

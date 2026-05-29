@@ -23,6 +23,7 @@ A Model Context Protocol (MCP) server that provides vector search and other capa
 - Text search with Atlas Search
 - Custom aggregation queries
 - MCP protocol compliance for AI agent integration
+- Local setup script for creating `mcp_config`, required collections, tool configs, and a default agent token
 
 **Versions**
    1. simple, single collection single mcp server: [searchmcp](./searchmcp/)
@@ -69,14 +70,23 @@ An interactive client application that connects to MCP servers and uses AWS Bedr
 
 2. **Deploy MCP server:**
    ```bash
-   cd searchmcp/
+   cd MongoMCP/
    python -m venv venv
    source venv/bin/activate 
    pip install -r requirements.txt
-   fastmcp run mongo_mcp.py --transport http --port 8001
+   pip install -e ./mongomcp
+   pip install -r webui/requirements.txt
+   python tools/mongosetup.py
+   fastmcp run mongo_mcp.py --transport http --port 8000
    ```
 
-3. **Run interactive client:**
+3. **Run the Web UI without containers:**
+   ```bash
+   cd MongoMCP/webui/
+   python app.py
+   ```
+
+4. **Run interactive client:**
    ```bash
    cd mcpclient/
    python -m venv venv
@@ -84,6 +94,28 @@ An interactive client application that connects to MCP servers and uses AWS Bedr
    pip install -r requirements.txt
    python airbnb-mcp.py
    ```
+
+## MongoMCP Without Containers
+
+Run the MongoMCP stack locally without Docker:
+
+```bash
+cd MongoMCP/
+python tools/mongosetup.py
+fastmcp run mongo_mcp.py --transport http --port 8000
+```
+
+In a second terminal:
+
+```bash
+cd MongoMCP/webui/
+python app.py
+```
+
+Notes:
+- `python tools/mongosetup.py` uses local settings by default.
+- It creates the `mcp_config` database, the `agent_identities`, `mcp_cache`, and `mcp_tools` collections, loads `tools/mcp_config.mcp_tools.json`, and seeds a default local agent identity.
+- The Web UI runs without containers from `MongoMCP/webui/app.py`.
 
 ## Configuration
 
