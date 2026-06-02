@@ -132,15 +132,9 @@ class MongoDBClient:
         """Initialize MongoDB connection using settings.py configuration"""
         ping_result = None
         try:
-<<<<<<< HEAD
             uri = self.get_mongo_uri()
             self.client = AsyncIOMotorClient(uri)
-            
-=======
-            self.client = AsyncIOMotorClient(self.get_mongo_uri())
-
->>>>>>> abd98a66eeb78267b8e5649cdf89e12707d0802b
-            # Test the connection
+                        # Test the connection
             ping_result = await self.client.admin.command('ping')
             logger.info(f"Successfully connected to MongoDB database: {self._db_name}")
 

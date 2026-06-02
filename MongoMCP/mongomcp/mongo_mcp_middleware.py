@@ -45,17 +45,11 @@ class MongoMCPMiddleware(Middleware):
             if self.mongo_client.sync_connect_to_mongodb():
                 if SHOW_ONCE < 1:
                     logger.info(f"loading dynamic config for endpoint {self.endpoint_name}")
-<<<<<<< HEAD
                 # load the config for this specific tool, then we load it for everything so we can return all tools on the shared endpoint 
                 # make 2 calls because we need this config regardless of active state 
                 #print(f'Endpoint: {self.endpoint_name}')
                 doc = self.mongo_client.get_collection().find_one({"Name": self.endpoint_name})  
                 #print(doc)  
-=======
-                # load the config for this specific tool, then we load it for everything so we can return all tools on the shared endpoint
-                # make 2 calls because we need this config regardless of active state
-                doc = self.mongo_client.get_collection().find_one({"Name": self.endpoint_name})
->>>>>>> abd98a66eeb78267b8e5649cdf89e12707d0802b
                 self.ANNOTATIONS = doc
                 self.endpoint_tools = self.ANNOTATIONS.get('tools', {})
                 #### load all active endpoints to return configs

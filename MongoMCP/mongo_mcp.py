@@ -11,16 +11,6 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastmcp.server.dependencies import AccessToken, get_access_token
 from starlette.responses import JSONResponse
 
-USE_LOCAL_MODE = os.getenv('USE_LOCAL_MODE', 'false').lower() == "true"
-
-if USE_LOCAL_MODE:
-    # Start with : > fastapi run mongo_mcp.py --port 8001
-    from local_settings import settings
-else:
-    # Running with kubernetes in EKS/Fargate
-    from AWS_settings import settings as settings
-
-=======
 from AWS_settings import settings
 #from local_settings import settings # change this to use AWS_settings
 from mongomcp import MongoDBQueryServer, MongoMCPMiddleware, ServerBedrockClient, MongoTokenVerifier, register_memory_tools, get_memory_bedrock_toolspecs, __version__ as MCP_VERSION
@@ -499,19 +489,9 @@ async def http_get_tools_config(token: Annotated[str, Depends(get_token)]) -> Di
 
 @app.get(f"/{settings.TOOL_NAME}/collection_info")
 async def http_get_collection_info(token: Annotated[str, Depends(get_token)]) -> Dict[str, Any]:
-<<<<<<< HEAD
     """Regular HTTP GET endpoint for collection info"""        
-<<<<<<< HEAD
-    #results = await get_collection_info.fn()
-    results = await get_collection_info()
-=======
-=======
-    """Regular HTTP GET endpoint for collection info"""
->>>>>>> abd98a66eeb78267b8e5649cdf89e12707d0802b
     results = await _resolve_tool_callable(get_collection_info)()
->>>>>>> 4e9bf596d06a8946007ef3a8d6feeea0741bf060
     return {"collection_info": results}
-
 
 @app.get(f"/{settings.TOOL_NAME}/llm_tools")
 async def http_get_llm_tools(token: Annotated[str, Depends(get_token)]) -> Dict[str, Any]:
