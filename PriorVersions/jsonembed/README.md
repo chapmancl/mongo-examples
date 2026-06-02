@@ -149,7 +149,7 @@ The system automatically detects and applies these filters from your questions:
 - **`country=XX`** - Filter by country code (e.g., US, FR, AU)
 - **`market=CityName`** - Filter by market/city
 - **`beds=N`** - Filter by number of beds
-- **`bedrooms=N`** - Filter by number of bedrooms  
+- **`bedrooms=N`** - Filter by number of bedrooms
 - **`id=XXXXXXXX`** - Get specific listing by ID (skips vector search)
 
 ### Sample Session

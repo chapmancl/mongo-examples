@@ -15,8 +15,8 @@ async def http_health_check():
     logger.info(f"Health check status: {server_info}")
     if Failed:
         raise ConnectionError("MongoDB connection failed")
-    return Failed     
-    
+    return Failed
+
 if __name__ == "__main__":
     if asyncio.run(http_health_check()):
         # If the health check fails, exit with code 1

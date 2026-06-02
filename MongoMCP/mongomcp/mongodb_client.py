@@ -17,12 +17,12 @@ class MongoDBClient:
     """
     def __init__(self, settings):
         self.db_url = None # set this if we're going to a cluster that is not our default from settings
-        self._connection_initialized = False        
+        self._connection_initialized = False
         self.client = {}
         self.db = {}
         self.collections: Dict[str, Any] = {}
         self.settings = settings
-        
+
         # default should always be the config collection because it is the only one we know about at first
         self._db_name = self.settings.mcp_config_db
         self._collection_name = self.settings.mcp_config_col
@@ -41,7 +41,7 @@ class MongoDBClient:
         """Convert string OID fields to ObjectId objects in a dictionary"""
         if data is None:
             return data
-        
+
         result = {}
         for key, value in data.items():
             if key == "_id" and isinstance(value, str):
@@ -54,7 +54,7 @@ class MongoDBClient:
             else:
                 result[key] = value
         return result
-   
+
     async def upsert_document(self, collection_name: str, filter: Dict, update: Dict) -> Any:
         """Update or insert a document in a specified collection"""
         await self.ensure_connection()
@@ -63,11 +63,11 @@ class MongoDBClient:
         bdoc_update = self._convert_oid_to_objectid(update)
         result = await collection.update_one(bdoc_filter, bdoc_update, upsert=True)
         return result.upserted_id
-    
+
     def get_mongo_uri(self) -> str:
         """
         Get the complete MongoDB connection URI.
-        
+
         Returns:
             MongoDB connection string
         """
@@ -89,9 +89,9 @@ class MongoDBClient:
             # Make request to AWS checkip service with timeout
             response = requests.get('https://checkip.amazonaws.com', timeout=10)
             response.raise_for_status()  # Raise exception for bad status codes
-            
+
             ip_address = response.text.strip()
-            
+
             return ip_address
         except Exception as e:
             logger.error(f"Error fetching current IP: {e}")
@@ -99,7 +99,7 @@ class MongoDBClient:
 
     def get_collection(self, collection_name: str=None):
         """Get a specific collection by name"""
-        try:                    
+        try:
             if collection_name is None:
                 collection_name = self._collection_name
             if collection_name in self.collections:
@@ -111,7 +111,7 @@ class MongoDBClient:
         except Exception as e:
             logger.error(f"Error getting collection {collection_name} in {self._db_name} at {self.db_url}: {e}")
             raise e
-    
+
     async def ensure_connection(self):
         """Ensure MongoDB connection is established"""
         print(f"Connecting to mongodb {self._db_name} {self._collection_name}, {self.db_url}")
@@ -127,18 +127,23 @@ class MongoDBClient:
                 self.client = {}
                 ping_result = await self.connect_to_mongodb()
         return ping_result
-    
+
     async def connect_to_mongodb(self):
         """Initialize MongoDB connection using settings.py configuration"""
         ping_result = None
         try:
+<<<<<<< HEAD
             uri = self.get_mongo_uri()
             self.client = AsyncIOMotorClient(uri)
             
+=======
+            self.client = AsyncIOMotorClient(self.get_mongo_uri())
+
+>>>>>>> abd98a66eeb78267b8e5649cdf89e12707d0802b
             # Test the connection
             ping_result = await self.client.admin.command('ping')
             logger.info(f"Successfully connected to MongoDB database: {self._db_name}")
-            
+
             self._set_locals()
             self._connection_initialized = True
             # load all tools to return configs (best-effort; not all clients need this)
@@ -147,11 +152,11 @@ class MongoDBClient:
             except Exception as e:
                 logger.warning(f"Could not load ALLTOOLS (non-fatal): {e}")
                 self.ALLTOOLS = []
-            
+
         except Exception as e:
             ip_address = self.get_current_ip()
             logger.error(f"Failed to connect to MongoDB from ip: {ip_address}: {e}")
-            self._connection_initialized = False            
+            self._connection_initialized = False
         return ping_result
 
     def sync_connect_to_mongodb(self):
@@ -170,6 +175,6 @@ class MongoDBClient:
     def _set_locals(self):
         """Set local database and collection references if we have the settings"""
         if self._db_name:
-            self.db = self.client[self._db_name]    
+            self.db = self.client[self._db_name]
         if self._collection_name:
             self.collections[self._collection_name] = self.db[self._collection_name]

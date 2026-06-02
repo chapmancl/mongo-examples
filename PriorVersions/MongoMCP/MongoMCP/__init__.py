@@ -28,7 +28,7 @@ __version__ = "1.0.0"
 # Expose main classes at package level
 __all__ = [
     "MongoDBVectorServer",
-    "MongoMCPMiddleware", 
+    "MongoMCPMiddleware",
     "BedrockClient",
     "MongoTokenVerifier",
     "MongoDBClient"

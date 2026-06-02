@@ -1,6 +1,6 @@
 from fastmcp.server.middleware.middleware import Middleware, MiddlewareContext, CallNext
 from typing import List, Dict, Any
-import mcp.types as mt    
+import mcp.types as mt
 import jwt
 import jwt.exceptions
 import datetime
@@ -37,29 +37,35 @@ class MongoMCPMiddleware(Middleware):
         self.active_endpoints = [self.endpoint_name]
         self.endpoint_tools = {}
         self.load_annotations()
-        
+
     def load_annotations(self):
-        """Load tool annotations from the JSON out of mongo"""        
+        """Load tool annotations from the JSON out of mongo"""
         global SHOW_ONCE
         try:
             if self.mongo_client.sync_connect_to_mongodb():
                 if SHOW_ONCE < 1:
                     logger.info(f"loading dynamic config for endpoint {self.endpoint_name}")
+<<<<<<< HEAD
                 # load the config for this specific tool, then we load it for everything so we can return all tools on the shared endpoint 
                 # make 2 calls because we need this config regardless of active state 
                 #print(f'Endpoint: {self.endpoint_name}')
                 doc = self.mongo_client.get_collection().find_one({"Name": self.endpoint_name})  
                 #print(doc)  
+=======
+                # load the config for this specific tool, then we load it for everything so we can return all tools on the shared endpoint
+                # make 2 calls because we need this config regardless of active state
+                doc = self.mongo_client.get_collection().find_one({"Name": self.endpoint_name})
+>>>>>>> abd98a66eeb78267b8e5649cdf89e12707d0802b
                 self.ANNOTATIONS = doc
                 self.endpoint_tools = self.ANNOTATIONS.get('tools', {})
                 #### load all active endpoints to return configs
                 if self._is_local:
-                    if SHOW_ONCE < 1:                    
+                    if SHOW_ONCE < 1:
                         logger.info(f"Running in local mode, loading only the current endpoint config for {self.endpoint_name}")
                         SHOW_ONCE += 1
                 else:
                     self.active_endpoints = list(self.mongo_client.get_collection().distinct("Name",{ "active": True}))
-                    if SHOW_ONCE < 1:                    
+                    if SHOW_ONCE < 1:
                         logger.info(f"Running in dynamic mode, loading all available endpoint configs for endpoints: {self.active_endpoints}")
                         SHOW_ONCE += 1
 
@@ -87,17 +93,17 @@ class MongoMCPMiddleware(Middleware):
     def check_authorization(self, token: str):
         """Check if the provided token is valid"""
         allowed = False
-        agent_rec = None        
+        agent_rec = None
         try:
             header = jwt.get_unverified_header(token)
             api_key = header.get("api_key")
-            
+
             self.mongo_client.sync_connect_to_mongodb()
             agent_coll = self.mongo_client.get_collection("agent_identities")
             agent_rec = agent_coll.find_one({"agent_key": api_key})
             if agent_rec:
                 # you should hash.... do as I say not as I do.
-                # store the hash private key in secrets manager, then implement hash. 
+                # store the hash private key in secrets manager, then implement hash.
                 # I think most will come in through a token service which makes this moot.
                 # trying to keep the demo simple, so just verifying the token directly here.
                 # in order to hash I would need a token generator service and I don't want to build that here.
@@ -109,11 +115,11 @@ class MongoMCPMiddleware(Middleware):
                     logger.warning(f"Token for agent {agent_name}:{api_key} is revoked.")
                     return (False, None)
                 agent_rec.pop("pvk")  # remove sensitive info
-                
+
                 if agent_name == agent_rec.get("agent_name"):
                     logger.info(f"Authorization successful for agent: {agent_name}")
                     allowed = True
-        
+
         except jwt.exceptions.InvalidTokenError  as je:
             logger.error(f"JWT decoding error: {je}")
             allowed = False
@@ -201,7 +207,7 @@ class MongoMCPMiddleware(Middleware):
             if self.mongo_client.sync_connect_to_mongodb():
                 collection = self.mongo_client.get_collection("llm_history")
                 data = {
-                    "agent_id": agent_id,                    
+                    "agent_id": agent_id,
                     "tool_name": tool_name,
                     "prompt_name": prompt_name,
                     "timestamp": datetime.datetime.now().isoformat()
@@ -218,12 +224,12 @@ class MongoMCPMiddleware(Middleware):
             logger.error(f"Failed to save LLM conversation: {e}")
             return False
 
-    async def on_list_prompts(self, context, call_next):        
+    async def on_list_prompts(self, context, call_next):
         return await super().on_list_prompts(context, call_next)
 
     async def on_list_tools(
-        self, 
-        context: MiddlewareContext[mt.ListToolsRequest], 
+        self,
+        context: MiddlewareContext[mt.ListToolsRequest],
         call_next: CallNext[mt.ListToolsRequest, List[mt.Tool]]
     ) -> List[mt.Tool]:
         """Intercept list_tools and apply MongoDB annotation config: descriptions, parameter info, and tool filtering."""

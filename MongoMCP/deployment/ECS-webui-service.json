@@ -54,7 +54,7 @@
     "family": "mcpwebui",
     "taskRoleArn": "arn:aws:iam::<<YOUR AWS ACCOUNT ID>>:role/ecsTaskExecutionRole",
     "executionRoleArn": "arn:aws:iam::<<YOUR AWS ACCOUNT ID>>:role/ecsTaskExecutionRole",
-    "networkMode": "awsvpc",    
+    "networkMode": "awsvpc",
     "volumes": [],
     "placementConstraints": [],
     "requiresCompatibilities": [

@@ -17,7 +17,7 @@ A highly configurable Model Context Protocol (MCP) server that dynamically loads
 - Python 3.8+
 - MongoDB Atlas cluster with MCP configuration collection
 - MongoDB Atlas cluster with target data collection(s) (optionally with vector search index configured)
-- MCP client 
+- MCP client
 
 ## How to Run the MCP service
 1. Setup MongoDB with MCP configurations (see [Dynamic Configuration Setup](#dynamic-configuration-setup) below)
@@ -47,7 +47,7 @@ Each configuration document should follow this structure (see `mcp_config.mcp_to
         "collection": "listingsAndReviews"
     },
     "tools": {
-        "vector_search": {      
+        "vector_search": {
             "description": "Perform semantic vector similarity search on MongoDB collection using AI embeddings.",
             "index": "listing_vector_index",
             "required": ["query_text"],
@@ -124,7 +124,7 @@ This approach allows you to:
 
 ## Target Data Configuration
 
-While the MCP server configuration is stored in a dedicated collection, the actual data being searched resides in target collections. Here's an example using the [MongoDB Atlas Sample Airbnb Dataset](https://www.mongodb.com/docs/atlas/sample-data/sample-airbnb/). 
+While the MCP server configuration is stored in a dedicated collection, the actual data being searched resides in target collections. Here's an example using the [MongoDB Atlas Sample Airbnb Dataset](https://www.mongodb.com/docs/atlas/sample-data/sample-airbnb/).
 
 For vector search capabilities, the target collection should have documents with the following structure:
 
@@ -286,7 +286,7 @@ For text search functionality, ensure you have a text search index named `search
    ```json
    {
      "username": "your_mongodb_username",
-     "password": "your_mongodb_password", 
+     "password": "your_mongodb_password",
      "uri": "cluster.mongodb.net"
    }
    ```
@@ -405,10 +405,10 @@ mongo_creds = "your-secrets-manager-secret-name"
    ```bash
    # Build the image
    docker build -t mongodb-dynamic-mcp .
-   
+
    # Tag for ECR
    docker tag mongodb-dynamic-mcp:latest your-account-id.dkr.ecr.your-aws-region.amazonaws.com/mongodb-dynamic-mcp:latest
-   
+
    # Push to ECR
    docker push your-account-id.dkr.ecr.your-aws-region.amazonaws.com/mongodb-dynamic-mcp:latest
    ```
@@ -417,10 +417,10 @@ mongo_creds = "your-secrets-manager-secret-name"
    ```bash
    # Initialize Terraform
    terraform init
-   
+
    # Review the deployment plan
    terraform plan
-   
+
    # Apply the configuration
    terraform apply
    ```
@@ -450,7 +450,7 @@ The `mcp_config.mcp_tools.json` file contains three example configurations:
 
 1. **AirbnbSearch** - Full-featured configuration for searching Airbnb property listings
    - Vector search capabilities for semantic similarity
-   - Text search for keyword-based queries  
+   - Text search for keyword-based queries
    - Unique value discovery for filters
    - Custom aggregation queries
    - Collection metadata access
@@ -472,7 +472,7 @@ To import the example configurations into your MongoDB collection:
 1. **Using MongoDB Compass**:
    - Open MongoDB Compass and connect to your cluster
    - Navigate to your configuration database and collection
-   - Click "Add Data" → "Import JSON or CSV file" 
+   - Click "Add Data" → "Import JSON or CSV file"
    - Select the `mcp_config.mcp_tools.json` file
    - Choose "JSON" as the file type and import
 
@@ -488,7 +488,7 @@ To import the example configurations into your MongoDB collection:
    ```javascript
    // Connect to your MongoDB cluster
    use your_config_database
-   
+
    // Load and insert the configuration data
    const configs = [/* paste content from mcp_config.mcp_tools.json */];
    db.mcp_configurations.insertMany(configs);
@@ -513,7 +513,7 @@ Each imported configuration can be used by setting the `MCP_TOOL_NAME` environme
 export MCP_TOOL_NAME=AirbnbSearch
 fastapi run mongo_mcp.py
 
-# Use the MflixSearch configuration  
+# Use the MflixSearch configuration
 export MCP_TOOL_NAME=MflixSearch
 fastapi run mongo_mcp.py
 
@@ -611,27 +611,27 @@ This MCP server is designed to work seamlessly with Amazon Bedrock Agents using 
    ```python
    from mcp.client.stdio import MCPStdio, StdioServerParameters
    from inline_agent import InlineAgent, ActionGroup
-   
+
    # Configure MCP server parameters
    mongodb_server_params = StdioServerParameters(
        command="docker",
        args=[
            "run", "-i", "--rm",
            "-e", "AWS_REGION",
-           "-e", "MONGO_CREDS", 
+           "-e", "MONGO_CREDS",
            "-e", "MONGO_DB",
            "-e", "MONGO_COL",
            "mongodb-vector-mcp:latest"
        ],
        env={
            "AWS_REGION": "your-aws-region",
-           "MONGO_CREDS": "your-secrets-manager-secret-name"           
+           "MONGO_CREDS": "your-secrets-manager-secret-name"
        }
    )
-   
+
    # Create MCP client and agent
    mongodb_mcp_client = await MCPStdio.create(server_params=mongodb_server_params)
-   
+
    agent = InlineAgent(
        foundation_model="us.anthropic.claude-3-5-sonnet-20241022-v2:0",
        instruction="You are a helpful assistant for MongoDB vector search operations.",
@@ -643,7 +643,7 @@ This MCP server is designed to work seamlessly with Amazon Bedrock Agents using 
            )
        ]
    )
-   
+
    # Use the agent
    response = await agent.invoke(
        input_text="Find similar properties to luxury apartments"
@@ -694,7 +694,7 @@ Cline is a popular VS Code extension that supports MCP servers. To integrate thi
    ```bash
    fastapi run mongo_mcp.py --transport sse --port 8001
    ```
-   
+
    Then configure Cline to connect to the running server:
    ```json
    {

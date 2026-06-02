@@ -235,7 +235,7 @@ See `tools/mcp_config.mcp_tools.json` for the local bootstrap configuration sour
 
 ---
 
-## MongoDB Secrets Manager Secret 
+## MongoDB Secrets Manager Secret
 
 The `MONGO_CREDS` secret should contain:
 
@@ -268,4 +268,3 @@ Then point your client at `http://localhost:8000/sse`.
 - **Vector dimension mismatch**: embedding dimensions in your index must match the model output (`amazon.titan-embed-text-v2:0` → 1024)
 - **Container can't reach MCP server**: when running WebUI container locally, set `MONGO_MCP_ROOT=http://host.docker.internal:8000`
 - **Any error with an IP address**: connection to MongoDB is not working. check network, or credentials.
-

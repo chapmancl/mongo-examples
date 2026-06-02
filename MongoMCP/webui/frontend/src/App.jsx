@@ -133,7 +133,7 @@ export default function App() {
         try { const d = await res.json(); errMsg = d.error || JSON.stringify(d) } catch {}
         throw new Error(errMsg)
       }
-      
+
       // If streaming available, read NDJSON stream and update live/status/history
       if (res.ok && res.body) {
         const reader = res.body.getReader()

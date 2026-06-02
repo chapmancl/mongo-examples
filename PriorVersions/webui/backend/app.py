@@ -28,7 +28,7 @@ def api_query():
     code = 500
     try:
         payload = request.get_json(force=True)
-        
+
         if processor.init_error:
             raise ValueError(f"Processor initialization failed: {processor.init_error}")
 
@@ -42,11 +42,11 @@ def api_query():
             processor.clear_history()
             resp = processor.clear_all_caches().json()
             code = 205
-        elif q.startswith("clear"):            
+        elif q.startswith("clear"):
             resp = processor.clear_all_caches().json()
             code = 205
         elif q.startswith("cache stats"):
-            resp = processor.get_cache_stats().json() 
+            resp = processor.get_cache_stats().json()
             code = 200
 
         elif q.startswith("cache clear"):
@@ -54,13 +54,13 @@ def api_query():
             code = 200
         else:
             # Normal question => forward to Claude/Bedrock with MCP tools
-            resp = processor.query_claude_with_mcp_tools(req).json()    
+            resp = processor.query_claude_with_mcp_tools(req).json()
             code = 200
 
     except Exception as e:
         traceback.print_exc()
         resp = QueryResponse(status="Error", error=str(e)).json()
-    
+
     return jsonify(resp), code
 
 
@@ -91,31 +91,31 @@ def generate(payload):
             """Execute a function in a background thread and stream messages."""
             result = [None]
             exception = [None]
-            
+
             def wrapper():
                 try:
                     result[0] = func()
                 except Exception as e:
                     exception[0] = e
-            
+
             thread = threading.Thread(target=wrapper, daemon=True)
             thread.start()
-            
+
             # Stream messages as they arrive from the handler
             while thread.is_alive():
                 for msg in processor.read_message_stream(timeout=0.1):
                     yield msg + '\n'
-            
+
             # Drain any remaining messages after thread completes
             for msg in processor.pop_queued_messages():
                 yield msg + '\n'
-            
+
             # Yield the final result and exception as a tuple
             yield (result[0], exception[0])
-        
+
         result = None
         exception = None
-        
+
         # Mirror CLI commands
         if q.startswith("clear history"):
             for item in execute_in_thread(processor.clear_history):
@@ -152,7 +152,7 @@ def generate(payload):
                     result, exception = item
                 else:
                     yield item
-        
+
         # Yield final result
         if exception:
             yield QueryResponse(error=str(exception)).json() + '\n'

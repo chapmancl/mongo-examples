@@ -1,5 +1,5 @@
 """
-MongoDB AI/LLM client functions 
+MongoDB AI/LLM client functions
 
 """
 
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 class DateTimeEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, datetime.datetime):
-            return obj.isoformat()  
+            return obj.isoformat()
         return json.JSONEncoder.default(self, obj)
 
 
@@ -35,10 +35,10 @@ class BedrockClient():
         self.mcp_tools = None
         self.mcp_call = None
         self.llm_setup = False
-        
-        
+
+
     def configure_tools(self, tools_config, tool_handler: Callable):
-        """Configure MCP tools for Bedrock client"""        
+        """Configure MCP tools for Bedrock client"""
         self.mcp_tools = tools_config
         self.mcp_call = tool_handler
         self.llm_setup = True
@@ -72,24 +72,24 @@ class BedrockClient():
     async def invoke_bedrock_with_tools(self, token, prompt: str, context: str=None, max_iterations=10 ) -> list:
         """
         Invoke Bedrock with MCP tools support and caching enabled
-        
+
         Args:
             prompt: User prompt to send to the LLM
             max_iterations: Maximum number of tool call iterations
-            
+
         Returns:
             str: Final assistant response
-        """        
+        """
         # Prepare the conversation messages
         if context:
             prompt = prompt + f"\nUse the following data for Context: {context}"
         messages = [{
             "role": "user",
-            "content": [{                
+            "content": [{
                 "text": prompt
             }]
         }]
-        
+
         # Tool configuration for Bedrock
         tool_config = {
             "tools": self.mcp_tools
@@ -101,7 +101,7 @@ class BedrockClient():
             "usage": usage
         }
 
-        # subtract 1 or else we would end on a tool response        
+        # subtract 1 or else we would end on a tool response
         for iteration in range(max_iterations):
             try:
                 # Invoke Bedrock using the Converse API
@@ -113,14 +113,14 @@ class BedrockClient():
 
                 # Aggregate usage statistics
                 itt_used = response['usage']
-                if usage is None: 
+                if usage is None:
                     usage = itt_used
                 else:
                     for k,v in itt_used.items(): usage[k] += v
                 return_obj["usage"] = usage
 
                 # Get the assistant's response
-                assistant_message = response['output']['message']                
+                assistant_message = response['output']['message']
                 messages.append(assistant_message)
                 return_obj["history"] = messages
 
@@ -128,7 +128,7 @@ class BedrockClient():
                 # just think it makes sense to end after the last LLM response
                 if iteration + 1 >= max_iterations:
                     break
-                
+
                 # Check if the assistant wants to use tools
                 if 'content' in assistant_message:
                     tool_calls = []
@@ -139,11 +139,11 @@ class BedrockClient():
                         # don't care about the text content right now its already recorded
                         #elif 'text' in content:
                         #    text_content.append(content['text'])
-                    
+
                     # If there are tool calls, execute them
                     if tool_calls:
                         tool_results = []
-                        
+
                         for tool_call in tool_calls:
                             tool_name = tool_call['name']
                             tool_input = tool_call['input']
@@ -169,17 +169,17 @@ class BedrockClient():
                                         "status": "error"
                                     }
                                 })
-                                
-                        
+
+
                         # Add tool results to the conversation
                         if tool_results:
                             tool_message = {"role": "user", "content": tool_results}
-                            messages.append(tool_message)              
-                            return_obj["history"] = messages  
+                            messages.append(tool_message)
+                            return_obj["history"] = messages
                             continue  # Continue the conversation loop
-                    
+
                     # If no more tool calls, then we're done and return the response
-                    return_obj["stats"] = {"total_itterations": iteration + 1, "max_itterations": max_iterations}     
+                    return_obj["stats"] = {"total_itterations": iteration + 1, "max_itterations": max_iterations}
                     # put the last message content as the main response
                     if len(messages) > 0 and messages[-1]["role"] == "assistant":
                         msg = messages[-1]["content"][0]["text"]
@@ -189,11 +189,11 @@ class BedrockClient():
                         else:
                             return_obj["response"] = msg
                     return return_obj
-                
+
                 # If we get here, there was no content to process
                 return_obj["error"] = "No response generated"
                 return return_obj
-                
+
             except ClientError as error:
                 error_code = error.response['Error']['Code']
                 logger.error(f"Bedrock error: {error_code} - {error.response['Error']['Message']}")
@@ -213,7 +213,7 @@ class BedrockClient():
         logger.error(f"invoke_bedrock_with_tools reached maximum iterations: {max_iterations}")
         return_obj["error"] = f"Maximum iterations ({max_iterations}) reached without completion"
         return return_obj
-        
+
 
     async def _call_mcp_tool(self,token, toolname: str, tool_input: dict) -> str:
         """Initialize a stateless session for tool calls."""
@@ -231,14 +231,14 @@ class BedrockClient():
 
     async def generate_embedding(self, text: str) -> list:
         """Generates an embedding for the input text using the given model.
-        
+
         Args:
             text: Input text to embed.
-        
+
         Returns:
             list: Embedding vector (list of floats) produced by the model.
         """
-        body = json.dumps({"inputText": text})        
+        body = json.dumps({"inputText": text})
         # Invoke the Bedrock embedding model (e.g., Titan Embeddings) specified in config
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(

@@ -18,17 +18,17 @@ class MongoTokenVerifier(TokenVerifier):
         self.resource_server_url="https://www.mongodb.com/" # we need the value for the base class, but don't use it
         super().__init__(required_scopes=["read"] )
         self.mongo_middleware = mongo_middleware
-    
+
     async def verify_token(self, token: str) -> AccessToken | None:
         try:
-            (allowed, agent_rec) = self.mongo_middleware.check_authorization(token)            
+            (allowed, agent_rec) = self.mongo_middleware.check_authorization(token)
             if allowed:
                 # get permission scope from mongo
                 scope = agent_rec.get("scope", ["read"])
                 atoken = AccessToken(
                     token=token,
                     client_id= agent_rec["agent_key"],
-                    scopes= scope                 
+                    scopes= scope
                 )
                 return atoken
         except Exception as e:

@@ -14,7 +14,7 @@
         }
       ],
       "essential": true,
-      "environment": [        
+      "environment": [
         {
           "name": "MONGO_CREDS",
           "value": "<<YOUR SECRETS MANAGER PATH>>"
@@ -27,7 +27,7 @@
           "name": "IS_LOCAL",
           "value": "true"
         }
-        
+
       ],
       "mountPoints": [],
       "volumesFrom": [],
@@ -58,7 +58,7 @@
   "family": "dynamicmcphost",
   "taskRoleArn": "arn:aws:iam::<<AWS ACCOUNT ID>>:role/ecsTaskExecutionRole",
   "executionRoleArn": "arn:aws:iam::<<AWS ACCOUNT ID>>:role/ecsTaskExecutionRole",
-  "networkMode": "awsvpc",  
+  "networkMode": "awsvpc",
   "volumes": [],
   "placementConstraints": [],
   "requiresCompatibilities": [

@@ -15,7 +15,7 @@ A custom Model Context Protocol (MCP) server that provides vector search capabil
 
 - Python 3.8+
 - MongoDB Atlas cluster with vector search index configured
-- MCP client 
+- MCP client
 
 ## How to Run the MCP service
 1. Setup Mongo (see [MongoDB Configuration](#mongodb-configuration) below)
@@ -189,7 +189,7 @@ It's recommended to use a Python virtual environment to isolate dependencies and
    ```json
    {
      "username": "your_mongodb_username",
-     "password": "your_mongodb_password", 
+     "password": "your_mongodb_password",
      "uri": "cluster.mongodb.net"
    }
    ```
@@ -350,14 +350,14 @@ This MCP server is designed to work seamlessly with Amazon Bedrock Agents using 
    ```python
    from mcp.client.stdio import MCPStdio, StdioServerParameters
    from inline_agent import InlineAgent, ActionGroup
-   
+
    # Configure MCP server parameters
    mongodb_server_params = StdioServerParameters(
        command="docker",
        args=[
            "run", "-i", "--rm",
            "-e", "AWS_REGION",
-           "-e", "MONGO_CREDS", 
+           "-e", "MONGO_CREDS",
            "-e", "MONGO_DB",
            "-e", "MONGO_COL",
            "mongodb-vector-mcp:latest"
@@ -369,10 +369,10 @@ This MCP server is designed to work seamlessly with Amazon Bedrock Agents using 
            "MONGO_COL": "sample_airbnb"
        }
    )
-   
+
    # Create MCP client and agent
    mongodb_mcp_client = await MCPStdio.create(server_params=mongodb_server_params)
-   
+
    agent = InlineAgent(
        foundation_model="us.anthropic.claude-3-5-sonnet-20241022-v2:0",
        instruction="You are a helpful assistant for MongoDB vector search operations.",
@@ -384,7 +384,7 @@ This MCP server is designed to work seamlessly with Amazon Bedrock Agents using 
            )
        ]
    )
-   
+
    # Use the agent
    response = await agent.invoke(
        input_text="Find similar properties to luxury apartments"
@@ -437,7 +437,7 @@ Cline is a popular VS Code extension that supports MCP servers. To integrate thi
    ```bash
    fastmcp run mongo_mcp.py --transport sse --port 8001
    ```
-   
+
    Then configure Cline to connect to the running server:
    ```json
    {

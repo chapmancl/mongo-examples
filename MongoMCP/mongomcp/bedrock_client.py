@@ -1,5 +1,5 @@
 """
-MongoDB AI/LLM client functions 
+MongoDB AI/LLM client functions
 
 """
 
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 class DateTimeEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, datetime.datetime):
-            return obj.isoformat()  
+            return obj.isoformat()
         return json.JSONEncoder.default(self, obj)
 
 
@@ -54,8 +54,8 @@ class BedrockClient:
         self.system = None
         self.message_handler = None
         self.show_response_progress = True
-        
-        
+
+
     def configure_tools(self, tools_config, tool_handler: Optional[Callable] = None):
         """
         Configure MCP tools for Bedrock client.
@@ -249,8 +249,8 @@ class BedrockClient:
                 "error": "Invalid Bedrock request: request must be a dict",
             }
 
-        messages = request.get("messages")        
-        
+        messages = request.get("messages")
+
         if not isinstance(messages, list):
             return {
                 "history": [],
@@ -273,7 +273,7 @@ class BedrockClient:
                     f"Added {cache_points_added} cache points to conversation",
                     status="Processing"
                 )
-        
+
         # Tool configuration for Bedrock
         tool_config = {"tools": self.mcp_tools} if self.mcp_tools else None
 
@@ -287,7 +287,7 @@ class BedrockClient:
             return_obj["error"] = "No MCP tools configured. Tool discovery may have failed."
             return return_obj
 
-        # subtract 1 or else we would end on a tool response        
+        # subtract 1 or else we would end on a tool response
         for iteration in range(self.max_iterations):
             try:
                 self._emit_progress(self.message_handler, f"Invoking Bedrock (iteration {iteration + 1})", status="LLM Thinking...")
@@ -315,7 +315,7 @@ class BedrockClient:
 
                 # Aggregate usage statistics
                 itt_used = response['usage']
-                if usage is None: 
+                if usage is None:
                     usage = itt_used
                 else:
                     for k,v in itt_used.items(): usage[k] += v
@@ -323,7 +323,7 @@ class BedrockClient:
                 return_obj["usage_last"] = itt_used
 
                 # Get the assistant's response
-                assistant_message = response['output']['message']                
+                assistant_message = response['output']['message']
                 if assistant_message.get("content"):
                     for content in assistant_message["content"]:
                         if content.get("text"):
@@ -342,7 +342,7 @@ class BedrockClient:
                 # just think it makes sense to end after the last LLM response
                 if iteration + 1 >= self.max_iterations:
                     break
-                
+
                 # Check if the assistant wants to use tools
                 if 'content' in assistant_message:
                     tool_calls = []
@@ -353,7 +353,7 @@ class BedrockClient:
                         # don't care about the text content right now its already recorded
                         #elif 'text' in content:
                         #    text_content.append(content['text'])
-                    
+
                     # If there are tool calls, execute them
                     if tool_calls:
                         tool_results = []
@@ -362,7 +362,7 @@ class BedrockClient:
                         estimated_context_tokens = self._estimate_total_context_tokens(messages)
                         context_baseline_tokens = max(current_usage_tokens, estimated_context_tokens)
                         projected_additional_tokens = 0
-                        
+
                         for tool_req in tool_calls:
                             tool_name = tool_req['name']
                             tool_input = tool_req['input']
@@ -423,12 +423,12 @@ class BedrockClient:
                                         "status": "error"
                                     }
                                 })
-                                
-                        
+
+
                         # Add tool results to the conversation
                         if tool_results:
                             tool_message = {"role": "user", "content": tool_results}
-                            messages.append(tool_message)              
+                            messages.append(tool_message)
                             return_obj["history"] = messages
                             total_result_chars = sum(len(str(tr)) for tr in tool_results)
                             tool_block_context_tokens = self._estimate_total_context_tokens(messages)
@@ -451,10 +451,10 @@ class BedrockClient:
                                 status="Token Usage",
                             )
                             continue  # Continue the conversation loop
-                    
+
                     # If no more tool calls, then we're done and return the response
                     self._emit_progress(self.message_handler, "No more tool calls, preparing final response...", status="Finalizing")
-                    return_obj["stats"] = {"total_itterations": iteration + 1, "max_itterations": self.max_iterations}     
+                    return_obj["stats"] = {"total_itterations": iteration + 1, "max_itterations": self.max_iterations}
                     # Always pass the raw assistant text through unchanged.
                     # JSON extraction is handled downstream via [JSON_DATA_START]
                     # tags only — no brace-counting.
@@ -462,11 +462,11 @@ class BedrockClient:
                         msg = messages[-1]["content"][0]["text"]
                         return_obj["response"] = msg
                     return return_obj
-                
+
                 # If we get here, there was no content to process
                 return_obj["error"] = "No response generated"
                 return return_obj
-                
+
             except ClientError as error:
                 error_code = error.response['Error']['Code']
                 error_msg = error.response['Error']['Message']
@@ -496,7 +496,7 @@ class BedrockClient:
         logger.error(f"invoke_bedrock_with_tools reached maximum iterations: {self.max_iterations}")
         return_obj["error"] = f"Maximum iterations ({self.max_iterations}) reached without completion"
         return return_obj
-        
+
 
     async def _call_mcp_tool(
         self,
@@ -523,12 +523,12 @@ class BedrockClient:
 
     async def generate_embedding(self, text: str, model_id: Optional[str] = None) -> list:
         """Generates an embedding for the input text using the given model.
-        
+
         Args:
             text: Input text to embed.
             model_id: The ID of the model to use. Defaults to self.settings.EMBEDDING_MODEL_ID.
                       Routes to Voyage AI for "voyage-*" models, Bedrock for "amazon.*" models.
-        
+
         Returns:
             list: Embedding vector (list of floats) produced by the model.
         """
@@ -550,7 +550,7 @@ class BedrockClient:
                 accept="application/json",
                 body=body
             )
-        )   
+        )
         # Parse the response and extract the embedding vector
         data = json.loads(response["body"].read())
         return {
@@ -561,30 +561,30 @@ class BedrockClient:
 
     async def generate_voyage_embeddings(self, text: str, model_id: Optional[str] = None, is_query: bool = True) -> list:
         """Generates an embedding for the input text using the Voyage AI API.
-        
+
         Args:
             text: Input text to embed.
             model_id: Voyage model to use. Defaults to self.settings.EMBEDDING_MODEL_ID.
             is_query: Whether the embedding is for a query. Defaults to True.
-        
+
         Returns:
             list: Embedding vector (list of floats) produced by the model.
         """
         api_key = self.settings.mongo_voyage_apikey()
         if is_query:
-            model_id = self.settings.QUERY_EMBEDDING_MODEL_ID   
-        if model_id is None:                                     
+            model_id = self.settings.QUERY_EMBEDDING_MODEL_ID
+        if model_id is None:
             model_id = self.settings.EMBEDDING_MODEL_ID
         if not model_id.startswith("voyage-"):
             logger.info(f"Model ID {model_id} for generate_voyage_embeddings is not a Voyage model. Defaulting to {model_id}.")
             model_id = "voyage-4"  # default to voyage-4 if not specified or incorrectly specified
-            
-        
+
+
         # voyage distinguishes between query and document embeddings for better performance
         input_type = "query" if is_query else "document"
-        
+
         logger.info(f"Using {input_type} embedding model: {model_id}")
-        
+
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 "https://ai.mongodb.com/v1/embeddings",

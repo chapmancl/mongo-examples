@@ -28,7 +28,7 @@ def handle_message(message, status="Processing") -> None:
     """Handle incoming messages from the server."""
     if isinstance(message, Exception):
         print(f"Error in message handler: {message}")
-        return    
+        return
     print(message)
 
 def _get_clean_input(prompt: str = "Question: ") -> str:
@@ -99,7 +99,7 @@ def run_cli(processor: Optional[CachedQueryProcessor] = None) -> None:
         print(f"first Answer: {answer}")
         answer, _, _history = proc.query_with_mcp_tools("what claim status for nicole weber?")
         print(f"secondAnswer: {answer}")
-        
+
         while True:
             user_input = _get_clean_input("Question: ")
             answer = "unknown"

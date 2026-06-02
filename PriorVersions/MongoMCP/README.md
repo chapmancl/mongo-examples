@@ -13,28 +13,28 @@ A highly configurable Model Context Protocol (MCP) server that dynamically loads
 - **Custom Aggregation Queries**: Execute complex MongoDB aggregation pipelines for advanced data analysis
 - **Collection Info**: Get comprehensive metadata about the MongoDB collection, indexes, and search capabilities
 - **Prompts**: store and edit MCP prompts which are dynamically callable from endpoints on the MCP service.
-- **Multi-Configuration Support**: Support for multiple MCP servers with multiple clusters and collections. 
+- **Multi-Configuration Support**: Support for multiple MCP servers with multiple clusters and collections.
 
 ## Prerequisites
 
 - Python 3.13+
 - MongoDB Atlas cluster with MCP configuration collection
 - MongoDB Atlas cluster with target data collection(s) (optionally with vector search index configured)
-- MCP client 
+- MCP client
 
 ## How to Run the MCP service
 1. Setup MongoDB with MCP configurations (see [Dynamic Configuration Setup](#dynamic-configuration-setup) below)
 2. Setup your python environment (see [Python Virtual Environment Setup](#python-virtual-environment-setup))
 3. Install requirements (see [Installation](#installation))
 4. Run fastapi (see [FastAPI Deployment](#fastapi-deployment))
-    
+
     a. optionally deploy a container:
       - locally [docker](#docker-instructions)
-    
+
     b. run on AWS:
       - ECS [Single Container](#pushing-to-amazon-ecr)
       - EKS [Kubernetes](#kubernetes-deployment-with-terraform)
-      
+
 5. Run the mcp client. see [mcpclient/mcp_client.py](../mcpclient/mcp_client.py)
 
 ## Dynamic Configuration Setup
@@ -47,7 +47,7 @@ This MCP server dynamically loads its configuration from a MongoDB collection. T
 
 Create 3 MongoDB collections in a new database:
 1. mcp_tools: MCP server configurations. Each document in this collection defines a complete MCP server configuration. see mcp_config.mcp_tools.json
-2. llm_history: save complete conversations with agents from prompts. 
+2. llm_history: save complete conversations with agents from prompts.
 3. agent_identities: simple toke and agent tracking, see [mcp_config.agent_identities.json](mcp_config.agent_identities.json). you will need to create ids (UUID) and pvk
   ```bash
   openssl rand -base64 32
@@ -67,7 +67,7 @@ Each server configuration document should follow this structure (see `mcp_config
         "collection": "listingsAndReviews"
     },
     "tools": {
-        "vector_search": {      
+        "vector_search": {
             "description": "Perform semantic vector similarity search on MongoDB collection using AI embeddings.",
             "index": "listing_vector_index",
             "required": ["query_text"],
@@ -148,7 +148,7 @@ This approach allows you to:
 
 ## Target Data Configuration
 
-While the MCP server configuration is stored in a dedicated collection, the actual data being searched resides in target collections. Here's an example using the [MongoDB Atlas Sample Airbnb Dataset](https://www.mongodb.com/docs/atlas/sample-data/sample-airbnb/). 
+While the MCP server configuration is stored in a dedicated collection, the actual data being searched resides in target collections. Here's an example using the [MongoDB Atlas Sample Airbnb Dataset](https://www.mongodb.com/docs/atlas/sample-data/sample-airbnb/).
 
 For vector search capabilities, the target collection should have documents with the following structure:
 
@@ -307,7 +307,7 @@ For text search functionality, ensure you have a text search index named `search
    ```json
    {
      "username": "your_mongodb_username",
-     "password": "your_mongodb_password", 
+     "password": "your_mongodb_password",
      "uri": "cluster.mongodb.net"
    }
    ```
@@ -374,7 +374,7 @@ Replace `<account-id>` with your AWS account ID.
    ```
 
 5. **Create an ECS Cluster**:
-   
+
    a. create the cluster
 
    b. use the sample task definition to run the container as a service: [ECS-Service.json](ECS-Service.json)
@@ -397,7 +397,7 @@ This project includes Terraform configuration for deploying the MCP server to Am
 The `main.tf` file provides a complete infrastructure setup including:
 
 - **Multiple Service Deployment**: Deploy multiple MCP server instances with different configurations
-- **Load Balancing**: AWS Application Load Balancer with SSL termination 
+- **Load Balancing**: AWS Application Load Balancer with SSL termination
 - **Service Discovery**: Kubernetes services and ingress rules for routing
 - **AWS Integration**: IAM roles for Service Account (IRSA) for Secrets Manager access
 - **Health Checks**: Configured health check endpoints for each service
@@ -434,10 +434,10 @@ mongo_creds = "your-secrets-manager-secret-name"
    ```bash
    # Initialize Terraform
    terraform init
-   
+
    # Review the deployment plan
    terraform plan
-   
+
    # Apply the configuration
    terraform apply
    ```
@@ -467,7 +467,7 @@ The `mcp_config.mcp_tools.json` file contains three example configurations:
 
 1. **AirbnbSearch** - Full-featured configuration for searching Airbnb property listings
    - Vector search capabilities for semantic similarity
-   - Text search for keyword-based queries  
+   - Text search for keyword-based queries
    - Unique value discovery for filters
    - Custom aggregation queries
    - Collection metadata access
@@ -489,7 +489,7 @@ To import the example configurations into your MongoDB collection:
 1. **Using MongoDB Compass**:
    - Open MongoDB Compass and connect to your cluster
    - Navigate to your configuration database and collection
-   - Click "Add Data" → "Import JSON or CSV file" 
+   - Click "Add Data" → "Import JSON or CSV file"
    - Select the `mcp_config.mcp_tools.json` file
    - Choose "JSON" as the file type and import
 
@@ -505,7 +505,7 @@ To import the example configurations into your MongoDB collection:
    ```javascript
    // Connect to your MongoDB cluster
    use your_config_database
-   
+
    // Load and insert the configuration data
    const configs = [/* paste content from mcp_config.mcp_tools.json */];
    db.mcp_configurations.insertMany(configs);
@@ -530,7 +530,7 @@ Each imported configuration can be used by setting the `MCP_TOOL_NAME` environme
 export MCP_TOOL_NAME=AirbnbSearch
 fastapi run mongo_mcp.py
 
-# Use the MflixSearch configuration  
+# Use the MflixSearch configuration
 export MCP_TOOL_NAME=MflixSearch
 fastapi run mongo_mcp.py
 
@@ -628,27 +628,27 @@ This MCP server is designed to work seamlessly with Amazon Bedrock Agents using 
    ```python
    from mcp.client.stdio import MCPStdio, StdioServerParameters
    from inline_agent import InlineAgent, ActionGroup
-   
+
    # Configure MCP server parameters
    mongodb_server_params = StdioServerParameters(
        command="docker",
        args=[
            "run", "-i", "--rm",
            "-e", "AWS_REGION",
-           "-e", "MONGO_CREDS", 
+           "-e", "MONGO_CREDS",
            "-e", "MONGO_DB",
            "-e", "MONGO_COL",
            "mongodb-vector-mcp:latest"
        ],
        env={
            "AWS_REGION": "your-aws-region",
-           "MONGO_CREDS": "your-secrets-manager-secret-name"           
+           "MONGO_CREDS": "your-secrets-manager-secret-name"
        }
    )
-   
+
    # Create MCP client and agent
    mongodb_mcp_client = await MCPStdio.create(server_params=mongodb_server_params)
-   
+
    agent = InlineAgent(
        foundation_model="us.anthropic.claude-3-5-sonnet-20241022-v2:0",
        instruction="You are a helpful assistant for MongoDB vector search operations.",
@@ -660,7 +660,7 @@ This MCP server is designed to work seamlessly with Amazon Bedrock Agents using 
            )
        ]
    )
-   
+
    # Use the agent
    response = await agent.invoke(
        input_text="Find similar properties to luxury apartments"
@@ -711,7 +711,7 @@ Cline is a popular VS Code extension that supports MCP servers. To integrate thi
    ```bash
    fastapi run mongo_mcp.py --transport sse --port 8001
    ```
-   
+
    Then configure Cline to connect to the running server:
    ```json
    {

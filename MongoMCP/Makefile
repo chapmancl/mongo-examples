@@ -9,7 +9,7 @@ WEBUI_VERSION ?= 1
 
 # ── ECR / registry ──────────────────────────────────────────
 AWS_REGION    ?= us-east-2
-AWS_ACCOUNT   ?= 
+AWS_ACCOUNT   ?=
 ECR_REGISTRY  := $(AWS_ACCOUNT).dkr.ecr.$(AWS_REGION).amazonaws.com
 MCP_IMAGE     := mongodb-dynamic-mcp
 WEBUI_IMAGE   := mongodb-mcp-ui
@@ -18,7 +18,7 @@ WEBUI_REPO    := $(ECR_REGISTRY)/$(WEBUI_IMAGE)
 
 # ── Runtime env (mirrors set-env.sh) ────────────────────────
 MCP_TOOL_NAME   ?= airbnbSearch
-MONGO_CREDS     ?= 
+MONGO_CREDS     ?=
 IS_LOCAL        ?= true
 MCP_ROOT_DEV    ?= http://localhost:8000
 MCP_ROOT_PROD   ?= https://

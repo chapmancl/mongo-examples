@@ -63,7 +63,7 @@ An interactive client application that connects to MCP servers and uses AWS Bedr
    ```bash
    cd jsonembed/
    python -m venv venv
-   source venv/bin/activate  
+   source venv/bin/activate
    pip install -r requirements.txt
    python embedairbnb.py
    ```
@@ -72,7 +72,7 @@ An interactive client application that connects to MCP servers and uses AWS Bedr
    ```bash
    cd MongoMCP/
    python -m venv venv
-   source venv/bin/activate 
+   source venv/bin/activate
    pip install -r requirements.txt
    pip install -e ./mongomcp
    pip install -r webui/requirements.txt
@@ -90,7 +90,7 @@ An interactive client application that connects to MCP servers and uses AWS Bedr
    ```bash
    cd mcpclient/
    python -m venv venv
-   source venv/bin/activate 
+   source venv/bin/activate
    pip install -r requirements.txt
    python airbnb-mcp.py
    ```

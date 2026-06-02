@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 class DateTimeEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, datetime.datetime):
-            return obj.isoformat()  
+            return obj.isoformat()
         return json.JSONEncoder.default(self, obj)
 
 
@@ -33,7 +33,7 @@ class OpenAIClient:
     def __init__(self, settings, use_azure: bool = False):
         self.settings = settings
         self.use_azure = use_azure
-        
+
         # Initialize the appropriate client
         if use_azure:
             # Azure OpenAI configuration
@@ -51,18 +51,18 @@ class OpenAIClient:
             )
             self.model_id = getattr(settings, 'OPENAI_MODEL_ID', 'gpt-4-turbo-preview')
             self.embedding_model_id = getattr(settings, 'OPENAI_EMBEDDING_MODEL_ID', 'text-embedding-3-large')
-        
+
         self.mcp_tools = None
         self.mcp_call = None
         self.llm_setup = False
-        
+
         # Invoke behavior is configured on the client instance, not per call.
         self.max_iterations = getattr(settings, 'LLM_MAX_ITERATIONS', 10)
         self.system = None
         self.message_handler = None
         self.show_response_progress = True
-        
-        
+
+
     def configure_tools(self, tools_config, tool_handler: Optional[Callable] = None):
         """
         Configure MCP tools for OpenAI client.
@@ -110,13 +110,13 @@ class OpenAIClient:
     def _convert_mcp_tools_to_openai_format(self) -> List[Dict[str, Any]]:
         """
         Convert MCP tools from Bedrock format to OpenAI function calling format.
-        
+
         Returns:
             List of tool definitions in OpenAI format
         """
         if not self.mcp_tools:
             return []
-        
+
         openai_tools = []
         for tool in self.mcp_tools:
             if 'toolSpec' in tool:
@@ -130,7 +130,7 @@ class OpenAIClient:
                     }
                 }
                 openai_tools.append(openai_tool)
-        
+
         return openai_tools
 
     def _convert_bedrock_messages_to_openai(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

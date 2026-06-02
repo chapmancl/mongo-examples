@@ -15,11 +15,11 @@ from pymongo.operations import SearchIndexModel
 from tools.generate_jwt_token import get_or_create_agent_identity_and_token
 
 
-AIR_BNB_VECTOR_SEARCH_INDEX_CONFIG = {	
+AIR_BNB_VECTOR_SEARCH_INDEX_CONFIG = {
   "fields": [
     {
       "type": "vector",
-      "path": "embedding", # "voyage_embedding", # 
+      "path": "embedding", # "voyage_embedding", #
       "numDimensions": 1024,
       "similarity": "cosine"
     },
@@ -52,7 +52,7 @@ AIR_BNB_VECTOR_SEARCH_INDEX_CONFIG = {
 
 AIR_BNB_DB_NAME = "sample_airbnb"
 AIR_BNB_COLLECTION_NAME = "listingsAndReviews"
-AIR_BNB_VECTOR_SEARCH_INDEX_NAME = "listing_vector_index" # "listing_voyage_index" # 
+AIR_BNB_VECTOR_SEARCH_INDEX_NAME = "listing_vector_index" # "listing_voyage_index" #
 
 
 # ---------------------------------------------------------------------------
@@ -109,9 +109,9 @@ MEMORY_SEMANTIC_VECTOR_INDEX_NAME = "memory_semantic_vector_index"
 
 def _load_settings(use_aws: bool):
 	if use_aws:
-		from AWS_settings import settings  
+		from AWS_settings import settings
 	else:
-		from local_settings import settings  
+		from local_settings import settings
 	return settings
 
 
@@ -197,7 +197,7 @@ def create_airbnb_vector_search_index(mongo_client: MongoDBClient) -> None:
 		},
 		name=AIR_BNB_VECTOR_SEARCH_INDEX_NAME,
 		type="vectorSearch",
-	)	
+	)
 	collection.create_search_index(model=search_index_model)
 
 	print(
@@ -275,7 +275,7 @@ def create_and_insert_agent_identity(
 	return metadata, token
 
 
-def run_setup(	
+def run_setup(
 	seed_agent_identity: bool = True,
 	agent_name: str = "webui_chatuser",
 ) -> None:
@@ -316,7 +316,7 @@ def main() -> None:
 	)
 	args = parser.parse_args()
 
-	run_setup(		
+	run_setup(
 		seed_agent_identity=args.seed_agent_identity,
 		agent_name=args.agent_name,
 	)

@@ -23,7 +23,7 @@ class SimpleCache:
         self._cache = {}
         self._default_ttl = default_ttl
         self._lock = threading.Lock()  # Prevent race conditions in multi-threaded context
-    
+
     def get(self, key: str):
         with self._lock:
             if key in self._cache:
@@ -33,15 +33,15 @@ class SimpleCache:
                 else:
                     del self._cache[key]
             return None
-    
+
     def set(self, key: str, value: Any, ttl: int = None):
         ttl = ttl or self._default_ttl
         with self._lock:
             self._cache[key] = (value, time.time(), ttl)
-    
+
     def clear(self):
         self._cache.clear()
-    
+
     def remove_pattern(self, pattern: str):
         """Remove keys matching a pattern"""
         keys_to_remove = [k for k in self._cache.keys() if pattern in k]
@@ -50,7 +50,7 @@ class SimpleCache:
 
 class CachedQueryProcessor:
     """Enhanced QueryProcessor with comprehensive caching support
-    
+
     Implements caching at multiple levels:
     1. Bedrock message caching with cache points
     2. MCP tool discovery caching
@@ -66,7 +66,7 @@ class CachedQueryProcessor:
         # AWS session objects
         self.bedrock_client = None
         self._create_bedrock_client()
-        
+
         self.mcp_client = None
         self.mcp_tools_config = None
         self.mongo_tools = None
@@ -74,39 +74,39 @@ class CachedQueryProcessor:
         self._system_prompt = ""
         self._headers = {
             'Authorization': f'Bearer {settings.AUTH_TOKEN}',
-            'Content-Type': 'application/json' 
-        }        
-        
+            'Content-Type': 'application/json'
+        }
+
         # Initialize caching system
         self._init_caches()
         self.get_bedrock_tools_from_mcp()
-    
+
     async def async_message_handler(self, message, status="Processing") -> None:
         return await asyncio.to_thread(self.message_handler, message, status)
-    
+
     def _handle_message(self, message, status="Processing") -> None:
         """Handle incoming messages from the server."""
         if isinstance(message, Exception):
             print(f"Error in message handler: {message}")
-            return    
+            return
         #print(message)
-    
-        
+
+
     def _init_caches(self):
         """Initialize cache systems with configurable TTLs"""
         # Cache settings from settings or defaults
         tool_discovery_ttl = getattr(settings, 'TOOL_DISCOVERY_CACHE_TTL', 300)
         tool_response_ttl = getattr(settings, 'TOOL_RESPONSE_CACHE_TTL', 60)
-        
+
         # Initialize caches
         self._tool_discovery_cache = SimpleCache(tool_discovery_ttl)
         self._tool_response_cache = SimpleCache(tool_response_ttl)
-        
+
         # Cache control flags
         self.enable_bedrock_caching = getattr(settings, 'ENABLE_BEDROCK_CACHING', True)
         self.enable_mcp_tool_caching = getattr(settings, 'ENABLE_MCP_TOOL_CACHING', True)
         self.enable_response_caching = getattr(settings, 'ENABLE_RESPONSE_CACHING', True)
-        
+
     def clear_all_caches(self):
         """Clear all caches - useful for testing or when data changes"""
         self._tool_discovery_cache.clear()
@@ -114,13 +114,13 @@ class CachedQueryProcessor:
         self.mcp_tools_config = None
         self.get_bedrock_tools_from_mcp()
         self.message_handler("All caches cleared", status="Cache Cleared")
-        
+
     def _create_bedrock_client(self) -> None:
         self.bedrock_client = boto3.client(
             'bedrock-runtime',
             region_name=settings.aws_region
         )
-    
+
     def _create_cache_key(self, tool_name: str, tool_input: dict) -> str:
         """Create a deterministic cache key from tool name and input"""
         # Sort the input dict to ensure consistent key generation
@@ -131,77 +131,77 @@ class CachedQueryProcessor:
     def invoke_bedrock_with_tools(self, prompt: str, max_iterations=10) -> str:
         """
         Invoke Bedrock with MCP tools support and caching enabled
-        
+
         Args:
             prompt: User prompt to send to the LLM
             max_iterations: Maximum number of tool call iterations
-            
+
         Returns:
             str: Final assistant response
         """
         # Get tools dynamically from MCP server discovery (with caching)
         tools = self.get_bedrock_tools_from_mcp()
-        
+
         # Prepare the conversation messages
         messages = self.history
         messages.append({
             "role": "user",
-            "content": [{                
+            "content": [{
                 "text": prompt
             }]
         })
-        
+
         # Smart cache point management - only add to key messages to stay under 4 block limit
         if self.enable_bedrock_caching:
             self._manage_cache_points(messages)
-        
+
         # Tool configuration for Bedrock
         tool_config = {
             "tools": tools
         }
-        
+
         for iteration in range(max_iterations):
             try:
                 # Invoke Bedrock using the Converse API
-                self.message_handler(f"Invoking Bedrock (iteration {iteration + 1})", status="LLM Thinking...")  
+                self.message_handler(f"Invoking Bedrock (iteration {iteration + 1})", status="LLM Thinking...")
                 response = self.bedrock_client.converse(
                     system=self._system_prompt,
                     modelId=settings.LLM_MODEL_ID,
                     messages=messages,
                     toolConfig=tool_config
                 )
-                
+
                 # Get the assistant's response
                 assistant_message = response['output']['message']
-                
+
                 # Display LLM reasoning
                 if assistant_message.get("content"):
                     for content in assistant_message["content"]:
                         if content.get("text"):
                             self.message_handler(f"LLM: {content['text'][0:150]}...", status="LLM Response")  # Show a preview of the response
-                
+
                 messages.append(assistant_message)
-                
+
                 # Check if the assistant wants to use tools
                 if 'content' in assistant_message:
                     tool_calls = []
                     text_content = []
-                    
+
                     for content in assistant_message['content']:
                         if 'toolUse' in content:
                             tool_calls.append(content['toolUse'])
                         elif 'text' in content:
                             text_content.append(content['text'])
-                    
+
                     # If there are tool calls, execute them
                     if tool_calls:
                         tool_results = []
-                        
+
                         for tool_call in tool_calls:
                             tool_name = tool_call['name']
                             tool_input = tool_call['input']
                             tool_use_id = tool_call['toolUseId']
-                            
+
                             # Execute the MCP tool call (with caching)
                             try:
                                 tool_result = self._execute_mcp_tool_cached(tool_name, tool_input)
@@ -224,17 +224,17 @@ class CachedQueryProcessor:
                         # Add tool results to the conversation
                         if tool_results:
                             tool_message = {"role": "user", "content": tool_results}
-                            messages.append(tool_message)                
+                            messages.append(tool_message)
                             continue  # Continue the conversation loop
-                    
+
                     # If no tool calls, return the text response
                     if text_content:
                         self.history = messages
                         return " ".join(text_content)
-                
+
                 # If we get here, there was no content to process
                 return "No response generated"
-                
+
             except ClientError as error:
                 error_code = error.response['Error']['Code']
                 print(f"Bedrock error: {error_code} - {error.response['Error']['Message']}")
@@ -247,7 +247,7 @@ class CachedQueryProcessor:
             except Exception as e:
                 print(f"Unexpected error in invoke_bedrock_with_tools: {e}")
                 return f"Error: {str(e)}"
-        
+
         self.history = messages
         return "Maximum iterations reached without completion"
 
@@ -259,69 +259,69 @@ class CachedQueryProcessor:
         cache_point = {"cachePoint": {"type": "default"}}
         cache_points_added = 0
         max_cache_points = 4
-        
+
         # Remove any existing cache points first
         for message in messages:
             if 'content' in message:
                 message['content'] = [
-                    content for content in message['content'] 
+                    content for content in message['content']
                     if 'cachePoint' not in content
                 ]
-        
+
         # Strategy: Add cache points to recent user messages and key assistant responses
         # Work backwards from the most recent message
         for i in range(len(messages) - 1, -1, -1):
             if cache_points_added >= max_cache_points:
                 break
-                
+
             message = messages[i]
-            
+
             # Add cache points to recent user messages (every 2nd message)
-            if (message.get('role') == 'user' and 
-                cache_points_added < max_cache_points and 
+            if (message.get('role') == 'user' and
+                cache_points_added < max_cache_points and
                 (len(messages) - i) % 2 == 1):
                 message['content'].append(cache_point.copy())
                 cache_points_added += 1
-            
+
             # Add cache points to assistant messages with tool results
-            elif (message.get('role') == 'assistant' and 
+            elif (message.get('role') == 'assistant' and
                   cache_points_added < max_cache_points and
                   any('toolUse' in str(content) for content in message.get('content', []))):
                 message['content'].append(cache_point.copy())
                 cache_points_added += 1
-        
+
         if cache_points_added > 0:
             self.message_handler(f"Added {cache_points_added} cache points to conversation")
 
     def _execute_mcp_tool_cached(self, tool_name: str, tool_input: dict) -> str:
         """
         Execute an MCP tool call with caching support
-        
+
         Args:
             tool_name: Name of the MCP tool to execute
             tool_input: Input parameters for the tool
-            
+
         Returns:
             str: Tool execution result
         """
         # Check if caching is disabled
         if not self.enable_response_caching:
             return self._execute_mcp_tool_direct(tool_name, tool_input)
-        
+
         # Create cache key
         cache_key = self._create_cache_key(tool_name, tool_input)
-        
+
         # Try to get from cache first
         cached_result = self._tool_response_cache.get(cache_key)
         if cached_result is not None:
             self.message_handler(f"Using cached response for {tool_name}")
             return cached_result
-        
+
         # Cache miss - execute the tool
         try:
             self.message_handler(f"Executing MCP tool: {tool_name} with args: {tool_input}", status="Tool Execution")
             result = self._execute_mcp_tool_direct(tool_name, tool_input)
-            
+
             # Cache the result
             self._tool_response_cache.set(cache_key, result)
             self.message_handler(f"Response for {tool_name}", status="LLM Reasoning...")
@@ -337,29 +337,29 @@ class CachedQueryProcessor:
     def discover_mcp_tools(self) -> dict:
         """
         Discover available MCP tools from the server with caching
-        
+
         Returns:
             dict: Dictionary containing available tools and their schemas
         """
         # Check if caching is disabled
         if not self.enable_mcp_tool_caching:
             return self._discover_mcp_tools_direct()
-        
+
         cache_key = "mcp_tools_discovery"
-        
+
         # Try to get from cache first
         cached_tools = self._tool_discovery_cache.get(cache_key)
         if cached_tools is not None:
             self.message_handler("Using cached MCP tools discovery")
             return cached_tools
-        
+
         # Cache miss - discover tools
         try:
             tools_data = self._discover_mcp_tools_direct()
-            
+
             # Cache the results
             self._tool_discovery_cache.set(cache_key, tools_data)
-            
+
             return tools_data
         except Exception as e:
             self.message_handler(f"Error discovering MCP tools: {e}", status="Error")
@@ -380,7 +380,7 @@ class CachedQueryProcessor:
                 available_tools = jdoc.get("available_tools", [])
                 self.mongo_tools = available_tools
                 #print(available_tools)
-                
+
             except requests.RequestException as e:
                 self.message_handler(f"Error making web request to {tools_url}: {e}", status="Error")
                 #return {"error": str(e), "tools": [], "resources": []}
@@ -389,15 +389,15 @@ class CachedQueryProcessor:
                 return asyncio.run(self._discover_multi_mcptools())
             else:
                 return asyncio.run(self._discover_mcp_tools_async())
-            
+
         except Exception as e:
             self.message_handler(f"Error discovering MCP tools: {e}", status="Error")
             return {"error": str(e), "tools": []}
-    
+
     async def _discover_multi_mcptools(self) -> dict:
         """
         Async method to discover MCP tools from a multiple mcp server endpoints in mongo_tools
-        
+
         Returns:
             dict: Dictionary containing available endpoints, tools, and their schemas
         """
@@ -429,9 +429,9 @@ class CachedQueryProcessor:
 
             self.mcp_client = fastmcp.Client(self.mcp_tools_config)
             async with self.mcp_client as session:
-                await session.ping()                    
+                await session.ping()
                 try:
-                    tools_response = await session.list_tools()     
+                    tools_response = await session.list_tools()
                     await self.async_message_handler(f"Discovered {len(tools_response)} tools from MCP server at {self.mongo_tools}", status="Tools Discovered")
                     for t in tools_response:
                         tools.append({
@@ -440,12 +440,12 @@ class CachedQueryProcessor:
                             "input_schema": t.inputSchema,
                             "annotation": t.annotations
                         })
-                    
+
                 except Exception as e:
                     await self.async_message_handler(f"Error listing tools: {e}", status="Error")
                     traceback.print_exc()
-                
-                # List available resources                     
+
+                # List available resources
                 try:
                     resources_response = await session.list_resources()
                     resources.extend([
@@ -459,21 +459,21 @@ class CachedQueryProcessor:
                     ])
                 except Exception as e:
                     await self.async_message_handler(f"Error listing resources: {e}", status="Error")
-                    
+
             return {
                 "tools": tools,
                 "resources": resources
             }
-        
+
         except Exception as e:
-            await self.async_message_handler(f"Failed to discover MCP tools: {e}", status="Error")   
-            traceback.print_exc()                     
+            await self.async_message_handler(f"Failed to discover MCP tools: {e}", status="Error")
+            traceback.print_exc()
             return {"error": str(e), "tools": [], "resources": []}
 
     async def _discover_mcp_tools_async(self) -> dict:
         """
         Async method to discover MCP tools from a single server using persistent session
-        
+
         Returns:
             dict: Dictionary containing available tools and their schemas
         """
@@ -483,12 +483,12 @@ class CachedQueryProcessor:
                 #print("Pinging MCP server...")
                 await session.ping()
                 #print("MCP server is reachable")
-            
+
                 # List available tools with error handling
                 tools = []
                 try:
-                    tools_response = await session.list_tools()     
-                    
+                    tools_response = await session.list_tools()
+
                     await self.async_message_handler(f"Discovered {len(tools_response)} tools from MCP server", status="Tools Discovered")
                     for t in tools_response:
                         tools.append({
@@ -496,11 +496,11 @@ class CachedQueryProcessor:
                             "description": t.description,
                             "input_schema": t.inputSchema,
                             "annotation": t.annotations
-                        })                    
+                        })
                 except Exception as e:
                     await self.async_message_handler(f"Error listing tools: {e}", status="Error")
-                
-                # List available resources 
+
+                # List available resources
                 resources = []
                 try:
                     resources_response = await session.list_resources()
@@ -515,31 +515,31 @@ class CachedQueryProcessor:
                     ]
                 except Exception as e:
                     print(f"Error listing resources: {e}")
-                
+
                 return {
                     "tools": tools,
                     "resources": resources
                 }
-            
+
         except Exception as e:
             await self.async_message_handler(f"Failed to discover MCP tools: {e}", status="Error")
-            traceback.print_exc()           
+            traceback.print_exc()
             return {"error": str(e), "tools": [], "resources": []}
-    
+
     def get_bedrock_tools_from_mcp(self) -> list:
         """
         Get Bedrock-formatted tools from MCP server discovery with caching
-        
+
         Returns:
             list: List of tools in Bedrock toolSpec format
         """
-        if self.mcp_tools_config is None:            
+        if self.mcp_tools_config is None:
             mcp_info = self.discover_mcp_tools()
             bedrock_tools = []
-            
+
             if "error" in mcp_info:
                 self.message_handler(f"MCP discovery failed {mcp_info['error']}", status="Error")
-                self.message_handler(str(mcp_info), status="Error")                
+                self.message_handler(str(mcp_info), status="Error")
 
             for tool in mcp_info.get("tools", []):
                 bedrock_tool = {
@@ -552,7 +552,7 @@ class CachedQueryProcessor:
                     }
                 }
                 bedrock_tools.append(bedrock_tool)
-            
+
             if self.mongo_collection_info is not None:
                 self._system_prompt = [
                     {"text":"***IMPORTANT: always use vector_search before aggregate_query"},
@@ -561,7 +561,7 @@ class CachedQueryProcessor:
                     {"text": json.dumps(self.mongo_collection_info)}
                 ]
 
-            self.mcp_tools_config = bedrock_tools        
+            self.mcp_tools_config = bedrock_tools
             self.message_handler(f"Using {len(bedrock_tools)} tools discovered from MCP server", status="Tools Ready")
 
         return self.mcp_tools_config
@@ -578,15 +578,15 @@ class CachedQueryProcessor:
             await self.async_message_handler(f"Failed MCP {toolname} call: {e}", status="Error")
             traceback.print_exc()
             raise
- 
+
     def query_claude_with_mcp_tools(self, question: str, history: list or None = None) -> tuple:
         """
         Query Claude with MCP tool support using Bedrock's Converse API with caching
-        
+
         Args:
-            question: User question or full prompt 
+            question: User question or full prompt
             history: optional list of historical questions and assistant answers
-            
+
         Returns:
             tuple: (assistant response (str), updated history (list))
         """
@@ -595,7 +595,7 @@ class CachedQueryProcessor:
             self.history = history
         if self.history is None:
             self.history = []
-        
+
         # Invoke Bedrock with MCP tools and caching
         assistant_message = self.invoke_bedrock_with_tools(question)
         return assistant_message, self.history
@@ -620,18 +620,18 @@ class CachedQueryProcessor:
     def _get_clean_input(self, prompt: str = "Question: ") -> str:
         """Get clean input from user, handling buffer issues and multi-line text"""
         import sys
-        
+
         # Flush any pending output first
         sys.stdout.flush()
         sys.stderr.flush()
-        
+
         # Clear input buffer by reading any leftover characters
         if sys.stdin.isatty():  # Only do this for interactive terminals
             try:
                 import select
                 import tty
                 import termios
-                
+
                 # Check if there's data waiting in stdin
                 if select.select([sys.stdin], [], [], 0) == ([sys.stdin], [], []):
                     # Read and discard any leftover input
@@ -645,11 +645,11 @@ class CachedQueryProcessor:
             except (ImportError, OSError):
                 # Fallback for systems without select/tty/termios
                 pass
-        
+
         # Get input and clean it
         try:
             user_input = input(prompt).strip()
-            
+
             # Handle cases where input might contain multiple lines
             # If the input seems truncated (no proper ending), prompt for continuation
             while user_input and not self._is_complete_input(user_input):
@@ -658,30 +658,30 @@ class CachedQueryProcessor:
                 if not continuation:
                     break
                 user_input += " " + continuation
-                
+
             return user_input
-            
+
         except EOFError:
             # Handle Ctrl+D gracefully
             raise KeyboardInterrupt
-    
+
     def _is_complete_input(self, text: str) -> bool:
         """Check if input appears to be complete (simple heuristic)"""
         if not text:
             return True
-            
+
         # Check for common indicators of complete input
         complete_indicators = ['.', '?', '!', '"', "'", ')', '}', ']']
         incomplete_indicators = ['(', '{', '[', '"', "'"]
-        
+
         # If it ends with a complete indicator, likely complete
         if text[-1] in complete_indicators:
             return True
-            
+
         # If it ends abruptly mid-word or with incomplete indicators, likely incomplete
         if text[-1] in incomplete_indicators:
             return False
-            
+
         # Default to complete
         return True
 
@@ -695,13 +695,13 @@ class CachedQueryProcessor:
         print("  cache clear - Clear all caches")
         print("  <question> - Claude query with MCP tool support and caching")
         print("Note: For multi-line input, the system will detect incomplete input and prompt for continuation.")
-        
+
         try:
             while True:
                 # Use the clean input method instead of direct input()
                 user_input = self._get_clean_input("Question: ")
                 answer = "unknown"
-                
+
                 if not user_input:
                     answer = "Not a valid question"
                 elif user_input.startswith("clear"):
@@ -716,18 +716,18 @@ class CachedQueryProcessor:
                     answer = "All caches cleared"
                 else:
                     # Claude query with MCP tool support and caching
-                    answer, history = self.query_claude_with_mcp_tools(user_input)                    
+                    answer, history = self.query_claude_with_mcp_tools(user_input)
                     answer = None  # Already displayed during processing
-                    
+
                 if answer:
                     print(f"Answer: {answer}")
-                    
+
         except ClientError as error:
             error_code = error.response['Error']['Code']
             if error_code in ['ExpiredTokenException', 'ExpiredToken']:
                 self.message_handler(f"AWS Token has expired! {error}", error)
             elif error_code == 'ValidationException':
-                self.history = None 
+                self.history = None
                 self.clear_all_caches()
                 self.message_handler(f"Too much history, clearing... {error}", error)
                 self.run()
@@ -740,7 +740,7 @@ class CachedQueryProcessor:
     def write_dict_to_json_file(self, data_dict: Dict[str, Any], filename: str) -> None:
         """
         Write a Python dictionary to a JSON file
-        
+
         Args:
             data_dict: Dictionary to write to JSON file
             filename: Path to output JSON file
@@ -752,8 +752,8 @@ class CachedQueryProcessor:
         except Exception as e:
             print(f"Error writing dictionary to JSON file: {e}")
 
-def main():    
-    processor = CachedQueryProcessor()    
+def main():
+    processor = CachedQueryProcessor()
     processor.run()
 
 if __name__ == "__main__":

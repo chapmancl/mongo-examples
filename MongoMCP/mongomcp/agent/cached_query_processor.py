@@ -21,7 +21,7 @@ import fastmcp
 
 class CachedQueryProcessor:
     """Enhanced QueryProcessor with comprehensive caching support
-    
+
     Implements caching at multiple levels:
     1. Bedrock message caching with cache points
     2. MCP tool discovery caching
@@ -39,7 +39,7 @@ class CachedQueryProcessor:
         self.message_handler = message_handler or self._handle_message
         # Bedrock client used by both MCP server and web UI paths.
         self.llm_client = WebUiBedrockClient(settings)
-        
+
         self.mcp_client = None
         self.endpoint_clients: Dict[str, fastmcp.Client] = {}
         self.mcp_endpoint_configs: Dict[str, Dict[str, Any]] = {}
@@ -51,9 +51,9 @@ class CachedQueryProcessor:
         self._system_prompt = []
         self._headers = {
             'Authorization': f'Bearer {settings.AUTH_TOKEN}',
-            'Content-Type': 'application/json' 
-        }    
-            
+            'Content-Type': 'application/json'
+        }
+
         self._tool_discovery_cache = MongoSessionCache(
             username="default_user",
             session_id="default_session",
@@ -66,7 +66,7 @@ class CachedQueryProcessor:
             cache_object_name="tool_response",
             settings=settings
         )
-        
+
         # Cache control flags
         self.enable_mcp_tool_caching = getattr(settings, "ENABLE_MCP_TOOL_CACHING", False)
         self.enable_response_caching = getattr(settings, "ENABLE_RESPONSE_CACHING", True)
@@ -106,14 +106,14 @@ class CachedQueryProcessor:
 
     async def async_message_handler(self, message, status="Processing") -> None:
         return await asyncio.to_thread(self.message_handler, message, status)
-    
+
     def _handle_message(self, message, status="Processing") -> None:
         """Handle incoming messages from the server."""
         if isinstance(message, Exception):
             print(f"Error in message handler: {message}")
-            return    
+            return
         #print(message)
-    
+
     def clear_all_caches(self):
         """Clear all caches - useful for testing or when data changes"""
         asyncio.run(self._tool_discovery_cache.clear())
@@ -137,9 +137,9 @@ class CachedQueryProcessor:
             except Exception as exc:
                 logger.error("Memory tool %s failed: %s", tool_name, exc)
                 return json.dumps({"error": str(exc)})
-        
+
         # Fast path: intercept and serve collection info from in-memory cache instead of calling MCP.
-        # this cache was built from API calls during setup so we're avoiding heavy common calls 
+        # this cache was built from API calls during setup so we're avoiding heavy common calls
         # to the MCP for collection info which is unlikely to change often and can be large.
         # Handles both prefixed ({endpoint}_get_collection_info) and unprefixed single-endpoint calls.
         suffix = "_get_collection_info"
@@ -157,7 +157,7 @@ class CachedQueryProcessor:
         # back to the mcp calling layer for other tools and cacheable collection info calls that aren't in the in-memory cache.
         if not self.enable_response_caching:
             return await self._call_mcp_tool(tool_name, tool_input)
-        
+
         # we have caching enabled, route through the cache layer with get_or_compute_async which handles cache hits, misses, and async compute.
         cache_key = MongoSessionCache.create_cache_key(tool_name, tool_input)
         result = await self._tool_response_cache.get_or_compute(
@@ -245,8 +245,8 @@ class CachedQueryProcessor:
         tools = []
         agent_prompt = ""
         try:
-            # spin up a thread for each endpoint call since requests is blocking and we want concurrency here, 
-            # especially if there are many endpoints or slow responses. FastMCP sessions require async context and was slow 
+            # spin up a thread for each endpoint call since requests is blocking and we want concurrency here,
+            # especially if there are many endpoints or slow responses. FastMCP sessions require async context and was slow
             # so I pulled it out to an API call with requests instead of using the session tool discovery
             resp = await asyncio.to_thread(
                 requests.get, f"{self.settings.mongo_mcp_root}/{name}/llm_tools", headers=self._headers
@@ -355,8 +355,8 @@ class CachedQueryProcessor:
             endpoint_name = None
             endpoint_tool_name = toolname
             endpoints = self.mcp_endpoints or []
-            # we need to split the toolname to get the endpoint server to call 
-            # the toolname is expected to be in the format {endpoint}_{tool} to allow for multiple endpoints 
+            # we need to split the toolname to get the endpoint server to call
+            # the toolname is expected to be in the format {endpoint}_{tool} to allow for multiple endpoints
             # with overlapping tool names, but we have to use a signle session object instead of the class
             # level client otherwise it sends the tool calls to every endpoint. this may be a bug with fastmcp.
             # Match the longest endpoint prefix first for deterministic routing.
@@ -423,7 +423,7 @@ class CachedQueryProcessor:
             await self.async_message_handler(f"Failed MCP {toolname} call: {e}", status="Error")
             traceback.print_exc()
             raise
- 
+
     def _trim_history(self, history: list) -> list:
         """Trim history by message count and token budget.
 
@@ -581,8 +581,8 @@ class CachedQueryProcessor:
         """
         Query LLM with MCP tool support using Bedrock's Converse API with caching.
         This flow is very complex because there are a lot of json formatting paths
-        and we want to preserve the ability to cache at multiple levels (tool discovery, tool responses) 
-        without accidentally caching errors or stale data. 
+        and we want to preserve the ability to cache at multiple levels (tool discovery, tool responses)
+        without accidentally caching errors or stale data.
         There are a number of competing concerns to balance:
         - Providing polymorphic support for json formats in tool inputs and outputs. We have 2 now, unknown future
         - Caching tool discovery results to avoid redundant API calls, but ensuring cache invalidation on schema changes

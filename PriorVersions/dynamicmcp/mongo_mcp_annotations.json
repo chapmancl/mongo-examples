@@ -7,7 +7,7 @@
     "collection": "listingsAndReviews"
   },
   "tools": {
-    "vector_search":{      
+    "vector_search":{
       "description": "Perform semantic vector similarity search on MongoDB collection using AI embeddings.\n\nThis tool converts natural language queries into vector embeddings using Amazon Titan Embeddings v2 and finds semantically similar property listings. It's ideal for finding properties based on meaning and context rather than exact keyword matches.\n\nUse cases:\n- \"Find a cozy apartment near Central Park\" (semantic understanding of 'cozy')\n- \"Spacious family home with modern amenities\" (understands family needs)\n- \"Romantic getaway with city views\" (contextual search)",
       "index": "listing_vector_index",
       "required":["query_text"],
@@ -105,7 +105,7 @@
     },
     "aggregate_query":{
       "description": "Execute a custom MongoDB aggregation pipeline query on the collection.\n\nThis tool allows you to run complex MongoDB aggregation queries with full flexibility. You can use any MongoDB aggregation stage including $match, $group, $project, $sort, $lookup, $unwind, $addFields, and many others. This is the most powerful tool for complex data analysis and custom queries.",
-      "reference_documentation": "https://www.mongodb.com/docs/manual/reference/mql/aggregation-stages/#std-label-aggregation-pipeline-operator-reference",      
+      "reference_documentation": "https://www.mongodb.com/docs/manual/reference/mql/aggregation-stages/#std-label-aggregation-pipeline-operator-reference",
       "required": ["pipeline"],
       "parameters": {
         "pipeline": {
@@ -152,7 +152,7 @@
     },
     "aggregate_query":{
       "description": "Execute a custom MongoDB aggregation pipeline query on the collection.\n\nThis tool allows you to run complex MongoDB aggregation queries with full flexibility. You can use any MongoDB aggregation stage including $match, $group, $project, $sort, $lookup, $unwind, $addFields, and many others. This is the most powerful tool for complex data analysis and custom queries.",
-      "reference_documentation": "https://www.mongodb.com/docs/manual/reference/mql/aggregation-stages/#std-label-aggregation-pipeline-operator-reference",      
+      "reference_documentation": "https://www.mongodb.com/docs/manual/reference/mql/aggregation-stages/#std-label-aggregation-pipeline-operator-reference",
       "required": ["pipeline"],
       "parameters": {
         "pipeline": {
@@ -170,6 +170,3 @@
     }
     }
 }
-
-
-

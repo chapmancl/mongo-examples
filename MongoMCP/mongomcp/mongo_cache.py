@@ -23,7 +23,7 @@ class MongoSessionCache:
 
         self.cache_object_name = cache_object_name
         self.username = username
-        self.session_id = session_id        
+        self.session_id = session_id
         self._collection_name = "mcp_cache"
         local_settings = settings
         local_settings.mcp_config_col = "mcp_cache" # Override collection name for cache
@@ -213,4 +213,3 @@ class MongoSessionCache:
 def create_cache_key(tool_name: str, tool_input: Dict[str, Any]) -> str:
     """Module-level alias for MongoSessionCache.create_cache_key — kept for backward compatibility."""
     return MongoSessionCache.create_cache_key(tool_name, tool_input)
-

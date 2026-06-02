@@ -20,6 +20,8 @@ else:
     # Running with kubernetes in EKS/Fargate
     from AWS_settings import settings as settings
 
+=======
+from AWS_settings import settings
 #from local_settings import settings # change this to use AWS_settings
 from mongomcp import MongoDBQueryServer, MongoMCPMiddleware, ServerBedrockClient, MongoTokenVerifier, register_memory_tools, get_memory_bedrock_toolspecs, __version__ as MCP_VERSION
 from mongomcp.agent.tool_router import ToolRouter
@@ -97,8 +99,8 @@ async def upsert_document(
     token: Annotated[AccessToken, Depends(get_access_token)] = None
 ) -> Dict[str, Any]:
     """Upsert a document in the specified MongoDB collection."""
-    
-    # if it comes in from the mcp tool directly then we have a token object 
+
+    # if it comes in from the mcp tool directly then we have a token object
     # otherwise it is a dict from the http endpoint llm_invoke
     # fastapi and fastmcp handle the dependency injection differently
     scopes = set()
@@ -107,10 +109,10 @@ async def upsert_document(
         token = get_access_token()
     if isinstance(token, dict):
         scopes = set(token.get("scope", []))
-        client_id = token.get("agent_key","")            
+        client_id = token.get("agent_key","")
     elif token is not None:
-        scopes = set(token.scopes)  
-        client_id = token.client_id        
+        scopes = set(token.scopes)
+        client_id = token.client_id
 
     # validate write permissions from the token scopes
     if "write" not in scopes:
@@ -119,7 +121,7 @@ async def upsert_document(
 
     try:
         doc_id = await mongo_server.upsert_document(collection, filter, update)
-        return {            
+        return {
             "message": f"Document {doc_id} upserted successfully in collection '{collection}'."
         }
     except (ValueError,PyMongoError) as e:
@@ -133,11 +135,11 @@ async def upsert_document(
 @mcp.tool()
 async def vector_search(
     collection: Annotated[str, Field(description="Name of the MongoDB collection to search in.")],
-    query_text: Annotated[str, Field(description= "Natural language query describing desired property characteristics.")],    
+    query_text: Annotated[str, Field(description= "Natural language query describing desired property characteristics.")],
     limit: Annotated[int, Field(default=10, description="Maximum number of results to return.", ge=1, le=50)] = 10,
     num_candidates: Annotated[int, Field(default=100, description="Number of candidates to consider during vector search.", ge=10, le=1000)] = 100,
     filters: Annotated[Optional[List], Field(
-        default=None, 
+        default=None,
         description= "Optional list of filters to narrow search results."
     )] = None
 ) -> Dict[str, Any]:
@@ -145,22 +147,22 @@ async def vector_search(
     try:
         if not query_text or not isinstance(query_text, str):
             return {"error": "query_vector must be a non-empty array of numbers"}
-        
+
         #TODO: validate collection exists and matches tool config, validate vector index exists on collection
 
         # incoming input is text, we need a vector for search. Use the LLM client to generate the embedding
-        vector_qry = await llm_client.generate_embedding(query_text)          
+        vector_qry = await llm_client.generate_embedding(query_text)
         results = await mongo_server.vector_search(collection, vector_qry, filters, limit, num_candidates)
         jobj = json.dumps(results, default=str)  # serialize results to JSON string... sometime results don't auto-serialize well so do it now
         return {
             "results": jobj,
             "count": len(results),
-            "query_info": {                
+            "query_info": {
                 "limit": limit,
                 "num_candidates": num_candidates
             }
         }
-        
+
     except Exception as e:
         logger.error(f"Vector search failed: {e}")
         logger.debug("".join(traceback.format_exception(None, e, e.__traceback__)))
@@ -176,11 +178,11 @@ async def text_search(
     try:
         if not query_text:
             return {"error": "query_text is required"}
-        
+
         #TODO: validate collection exists, validate text search index exists on collection
 
         results = await mongo_server.text_search(collection, query_text, limit)
-        jobj = json.dumps(results, default=str) 
+        jobj = json.dumps(results, default=str)
         return {
             "results": jobj,
             "count": len(results),
@@ -189,7 +191,7 @@ async def text_search(
                 "limit": limit
             }
         }
-        
+
     except Exception as e:
         logger.error(f"Text search failed: {e}")
         logger.debug("".join(traceback.format_exception(None, e, e.__traceback__)))
@@ -243,7 +245,7 @@ async def get_unique_values(
 ) -> Dict[str, Any]:
     """Dynamic docstring loaded from JSON configuration"""
     try:
-        
+
         # Use MongoDB aggregation to get unique values
         pipeline = [
             {
@@ -263,11 +265,11 @@ async def get_unique_values(
                 }
             }
         ]
-        
+
         results = await mongo_server.agg_pipeline(collection, pipeline)
         # Also get total document count for percentage calculation
         total_docs = await mongo_server.get_collection(collection).count_documents({})
-        
+
         # Add percentage to each result
         for result in results:
             result["percentage"] = round((result["count"] / total_docs) * 100, 2)
@@ -278,7 +280,7 @@ async def get_unique_values(
             "total_unique_count": len(results),
             "total_documents": total_docs
         }
-        
+
     except Exception as e:
         logger.error(f"Get unique values failed: {e}")
         logger.debug("".join(traceback.format_exception(None, e, e.__traceback__)))
@@ -289,9 +291,9 @@ async def get_collection_info() -> Dict[str, Any]:
     """Dynamic docstring loaded from JSON configuration"""
     try:
         # Get collection stats and index information
-        info = await mongo_server.get_collection_info()       
+        info = await mongo_server.get_collection_info()
         return info
-        
+
     except Exception as e:
         logger.error(f"Get collection info failed: {e}")
         logger.debug("".join(traceback.format_exception(None, e, e.__traceback__)))
@@ -308,14 +310,14 @@ async def aggregate_query(
         # Validate pipeline parameter
         if not pipeline or not isinstance(pipeline, list):
             return {"error":"pipeline must be a non-empty list of aggregation stages"}
-        
+
         # Validate each stage in the pipeline
         for i, stage in enumerate(pipeline):
             if not isinstance(stage, dict):
                 return {"error":f"pipeline stage {i} must be a dictionary, got {type(stage)}"}
             if not stage:
                 return {"error":f"pipeline stage {i} cannot be empty"}
-        
+
         # Add limit stage if specified and not already present in pipeline
         final_pipeline = pipeline.copy()
         if limit is not None:
@@ -323,12 +325,12 @@ async def aggregate_query(
             has_limit = any("$limit" in stage for stage in pipeline)
             if not has_limit:
                 final_pipeline.append({"$limit": limit})
-        
+
         # Execute the aggregation pipeline
         results = await mongo_server.agg_pipeline(collection, final_pipeline)
         jobj = json.dumps(results,default=str)
         logger.info(f"Aggregation query returned {len(results)} results")
-        
+
         return {
             "results": jobj,
             "count": len(results),
@@ -449,7 +451,7 @@ async def root_endpoint(token: Annotated[str | None, Depends(get_optional_token)
             "version": MCP_VERSION,
             "available_tools": active_tools,
             "available_endpoints": [
-                f"GET  /{settings.TOOL_NAME}/health",                
+                f"GET  /{settings.TOOL_NAME}/health",
                 f"GET  /{settings.TOOL_NAME}/collection_info",
                 f"GET  /{settings.TOOL_NAME}/llm_tools",
                 f"POST /{settings.TOOL_NAME}/route",
@@ -471,20 +473,20 @@ async def root_endpoint(token: Annotated[str | None, Depends(get_optional_token)
 @app.get("/health")
 async def http_health_check(token: Annotated[str | None, Depends(get_optional_token)]) -> Dict[str, Any]:
     """Regular HTTP GET endpoint for health checks"""
-    # always return something or else the load balancer will mark it unhealthy and continue to reload the container        
+    # always return something or else the load balancer will mark it unhealthy and continue to reload the container
     failed, server_info = await mongo_server.get_mongo_info(False)
     output = server_info.copy()
     output["version"] = MCP_VERSION
-    if not token: 
+    if not token:
         # no token, remove sensitive info
         output.pop("mongodb")
         output.pop("description")
         output["connected"] = server_info["mongodb"].get("connected", False)
         output["timestamp"] = server_info["mongodb"].get("timestamp", "")
-        
+
     status_code = 200
     #if failed:
-    #    status_code = 500        
+    #    status_code = 500
     return output
 
 @app.get("/tools_config")
@@ -497,11 +499,15 @@ async def http_get_tools_config(token: Annotated[str, Depends(get_token)]) -> Di
 
 @app.get(f"/{settings.TOOL_NAME}/collection_info")
 async def http_get_collection_info(token: Annotated[str, Depends(get_token)]) -> Dict[str, Any]:
+<<<<<<< HEAD
     """Regular HTTP GET endpoint for collection info"""        
 <<<<<<< HEAD
     #results = await get_collection_info.fn()
     results = await get_collection_info()
 =======
+=======
+    """Regular HTTP GET endpoint for collection info"""
+>>>>>>> abd98a66eeb78267b8e5649cdf89e12707d0802b
     results = await _resolve_tool_callable(get_collection_info)()
 >>>>>>> 4e9bf596d06a8946007ef3a8d6feeea0741bf060
     return {"collection_info": results}
@@ -570,7 +576,7 @@ async def route_tools(body: Dict[str, Any], token: Annotated[str, Depends(get_to
 
 
 @app.get(f"/{settings.TOOL_NAME}/reset")
-async def reset_settings(token: Annotated[str, Depends(get_token)]) -> Dict[str, Any]:    
+async def reset_settings(token: Annotated[str, Depends(get_token)]) -> Dict[str, Any]:
     """Reload config from MongoDB and reconfigure the LLM client with the latest tool annotations."""
     logger.info(f"Begin settings reset for {settings.TOOL_NAME}")
     output = {"action": "reset settings"}
@@ -593,36 +599,36 @@ async def reset_settings(token: Annotated[str, Depends(get_token)]) -> Dict[str,
     return output
 
 @app.post(f"/{settings.TOOL_NAME}/prompt/{{prompt_name}}")
-async def invoke_llm(prompt_name: str, body: Dict[str, Any], 
-                     token: Annotated[str, Depends(get_token)]) -> Dict[str, Any]:    
+async def invoke_llm(prompt_name: str, body: Dict[str, Any],
+                     token: Annotated[str, Depends(get_token)]) -> Dict[str, Any]:
     """
-    Invoke LLM with specified prompt and incoming context. 
+    Invoke LLM with specified prompt and incoming context.
     The prompt is looked from and must exist in the MongoDB tool configuration prompts section.
-    
-    """     
+
+    """
     if not "llm:invoke" in token.get("scope", []):
         logger.error(f"Insufficient scope for invoke_llm: llm:invoke permission required for agent {token['agent_key']}")
         raise HTTPException(status_code=403, detail="Insufficient scope")
 
     context = body.get("context")
-    output = {        
+    output = {
         "prompt_name": prompt_name,
         "input_context": context
     }
     try:
         if not context:
             raise ValueError("context must be a non-empty json object in the request body")
-        
-        # don't load llm client with tools unless there are prompts available.         
+
+        # don't load llm client with tools unless there are prompts available.
         # if the prompt changes (on the mongo side), then reset_settings must be called to reload the tool annotations.
         # this will finish the setup next time an invoke is called.
         global llm_client
         if not llm_client.llm_setup:
             tools_config = mongo_middleware.build_tools_from_annotations()
             llm_client.configure_tools(tools_config)
-                        
-        # Lookup prompt from mongo_server.tool_config["prompts"] if it exists        
-        if ("prompts" in mongo_server.tool_config and 
+
+        # Lookup prompt from mongo_server.tool_config["prompts"] if it exists
+        if ("prompts" in mongo_server.tool_config and
             prompt_name in mongo_server.tool_config["prompts"]):
             #We have a prompt!
             prompt = mongo_server.tool_config["prompts"][prompt_name]
@@ -635,45 +641,45 @@ async def invoke_llm(prompt_name: str, body: Dict[str, Any],
             # Bind request-scoped callback on the client instance; BedrockClient no longer
             # accepts a per-call tool callback parameter.
             llm_client.mcp_call = scoped_mcp_call
-                        
+
             resp_obj = await llm_client.invoke_bedrock_with_tools(
                 prompt=prompt,
                 context=json.dumps(context),
             )
             output.update(resp_obj)  # merge the response object into output
-            
-            # lots of potential errors and exceptions here, so catch them all. 
+
+            # lots of potential errors and exceptions here, so catch them all.
             # tried to pass most through the return, but some may still raise
-            # I could not handle all the exceptions by name either, some would raise a runtime exception 
+            # I could not handle all the exceptions by name either, some would raise a runtime exception
             # instead of passing the exception directly
-            return_json = {} 
+            return_json = {}
             if resp_obj.get("error"):
-                return_json = JSONResponse(output, 500)                    
+                return_json = JSONResponse(output, 500)
             else:
                 logger.info(f"invoke successful for prompt {prompt_name}")
                 return_json = JSONResponse(output, 201)
-            
+
             # We want to save the full conversation including LLM output regardless of success or failure
             # Try to handle the exceptions and bubble them up to the output so we don't hit the catches below.
             mongo_middleware.save_llm_conversation(output, token["agent_key"], settings.TOOL_NAME, prompt_name)
             return return_json
 
-        else:            
+        else:
             output["error"] = f"Prompt '{prompt_name}' not found in configuration."
-            return JSONResponse(output, 404)        
-        
+            return JSONResponse(output, 404)
+
     except HTTPException as he:
         logger.error(f"Authorization failed: {he.detail}")
         output["error"] = he.detail
         return JSONResponse(output,he.status_code)
     except Exception as e:
         logger.error(f"invoke_llm failed: {e}")
-        logger.debug("".join(traceback.format_exception(None, e, e.__traceback__)))        
+        logger.debug("".join(traceback.format_exception(None, e, e.__traceback__)))
         output["error"] = f"Error executing invoke_llm: {str(e)}"
         return JSONResponse(output, 500)
 
 @app.post("/vectorize")
-async def vectorize_text(body: Dict[str, Any], 
+async def vectorize_text(body: Dict[str, Any],
                      token: Annotated[str, Depends(get_token)]
                      )  -> Dict[str, Any]:
     """
@@ -686,10 +692,10 @@ async def vectorize_text(body: Dict[str, Any],
 
         # Extract textChunk from the request body
         text_chunk = body.get("textChunk")
-        
+
         if not text_chunk or not isinstance(text_chunk, str):
             raise Exception("textChunk must be a non-empty string in the request body")
-        
+
         vector_info = await llm_client.generate_embedding(text_chunk)
         logger.info(f"Vectorization successful for input text of length {len(text_chunk)}")
         return {
@@ -697,7 +703,7 @@ async def vectorize_text(body: Dict[str, Any],
             "embedding_model": vector_info["embedding_model"],
             "vector": vector_info["vector"]
         }
-        
+
     except HTTPException as he:
         logger.error(f"Authorization failed: {he.detail}")
         return JSONResponse(status_code=he.status_code, content={"error": he.detail})
@@ -720,13 +726,13 @@ def main():
     Main entry point for the FastMCP server
     python mongo_mcp.py
     for the container call fastapi directly
-    fastapi run mongo_mcp.py 
+    fastapi run mongo_mcp.py
     fastmcp mongo_mcp.py --transport sse --port 8001
-    
-    """   
+
+    """
     #mcp.run(transport="sse", host="0.0.0.0", port=8001)
     #mcp.run(transport="sse",  port=8001) # this is for local IDE/Cline integration
-    mcp.run(transport="http", host="0.0.0.0", port=8000) # this is for AWS containers  
+    mcp.run(transport="http", host="0.0.0.0", port=8000) # this is for AWS containers
 
 
 if __name__ == "__main__":

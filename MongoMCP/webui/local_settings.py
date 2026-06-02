@@ -3,7 +3,7 @@ from typing import Dict
 
 class LocalSettings:
     def __init__(self):
-        self.aws_region = os.getenv('AWS_REGION', 'us-east-2')        
+        self.aws_region = os.getenv('AWS_REGION', 'us-east-2')
         self.EMBEDDING_MODEL_ID = "amazon.titan-embed-text-v2:0"
         self.mcp_config_db = os.getenv('MCP_CONFIG_DB', 'mcp_config')
         self.mcp_config_col = os.getenv('MCP_CONFIG_COL', 'mcp_tools')
@@ -22,30 +22,29 @@ class LocalSettings:
             "***IMPORTANT: All output should be Markdown formatted for display within a div in an existing webpage. Do not include html, head, or body tags. Only include the inner content. Always use Markdown formatting.",
             "Only use vector_search with collections that have a search_indexes.type=vectorSearch.",
         ]
-        self.AUTH_TOKEN = "eyJhbGciOiJIUzI1NiIsImFwaV9rZXkiOiJiOWNiYjdjNS04ZjRlLTRmZTktYWRlMC0xNzRkNWJhYzM4NTAiLCJ0eXAiOiJKV1QifQ.eyJhZ2VudF9uYW1lIjoibG9jYWxfY29uc29sZV9jaGF0Ym90In0.uQPbIpQWqtEo-478400Ek5AuMW7f-QpY9itzmiXBCs4"
+        self.AUTH_TOKEN = ""
 
-        
-        
+
         # Hardcoded credentials for local development only.
         self._credentials: Dict[str, str] = {
             "username": os.getenv("MONGO_USERNAME", "main_user"),
             "password": os.getenv("MONGO_PASSWORD", "private"),
             "mongoUri": os.getenv("MONGO_URI", "localhost:27017")
         }
-    
+
     def get_mongo_credentials(self) -> Dict[str, str]:
         """
         Fetch MongoDB credentials from AWS Secrets Manager.
-        
+
         Returns:
-            Dict containing username, password, and mongoUri
-            
+            Dict containing username, password, and mongoUrl
+
         Raises:
             Exception: If failed to fetch credentials
         """
         return self._credentials
 
-      
+
     def mongo_url(self) -> str:
         """Get MongoDB connection URI."""
         return self._credentials['mongoUri']
@@ -64,4 +63,3 @@ def __getattr__(name: str):
     if hasattr(settings, name):
         return getattr(settings, name)
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
-

@@ -26,50 +26,50 @@ class AWSSettings:
             "Only use vector_search with collections that have a search_indexes.type=vectorSearch.",
         ]
         self.AUTH_TOKEN = ""
-        
+
 
         # Initialize AWS Secrets Manager client
         self._secrets_client = boto3.client(
             'secretsmanager',
             region_name=self.aws_region
         )
-        
+
         # Cache for credentials to avoid repeated API calls
         self._credentials_cache: Optional[Dict[str, str]] = None
         self.get_mongo_credentials()  # Pre-fetch credentials on initialization
-    
+
     def get_mongo_credentials(self) -> Dict[str, str]:
         """
         Fetch MongoDB credentials from AWS Secrets Manager.
-        
+
         Returns:
             Dict containing username, password, and mongoUrl
-            
+
         Raises:
             Exception: If failed to fetch credentials
         """
         if self._credentials_cache:
             return self._credentials_cache
-            
+
         try:
             response = self._secrets_client.get_secret_value(SecretId=self.mongo_creds)
             secret = json.loads(response['SecretString'])
-            
+
             self._credentials_cache = {
                 'username': secret['username'],
                 'password': secret['password'],
                 'mongoUrl': secret['uri']
             }
-            
+
             return self._credentials_cache
-            
+
         except ClientError as error:
             print(f'Failed to fetch MongoDB credentials: {error}')
             raise error
         except json.JSONDecodeError as error:
             print(f'Failed to parse secret JSON: {error}')
             raise error
-      
+
     def mongo_url(self) -> str:
         """Get MongoDB connection URL."""
         return self._credentials_cache['mongoUrl']
@@ -88,4 +88,3 @@ def __getattr__(name: str):
     if hasattr(settings, name):
         return getattr(settings, name)
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
-

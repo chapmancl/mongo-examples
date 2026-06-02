@@ -23,3 +23,9 @@ pyvenv.cfg
 
 *.tfvars
 *Zone.Identifier
+*:Zone.Identifier
+
+# Local secrets
+.env
+.env.*
+!.env.example

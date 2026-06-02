@@ -868,13 +868,13 @@ class MemoryService:
             return {"strategies": results, "results": results, "count": len(results)}
 
         query_vec = (await self.llm_client.generate_embedding(query, model_id=self.query_embedding_model_id))["vector"]
-        candidates = await self._strategy_rank_fusion(col, query, query_vec, limit, tags)        
+        candidates = await self._strategy_rank_fusion(col, query, query_vec, limit, tags)
         if candidates is None or len(candidates) == 0:
             logger.info("$rankFusion unavailable for strategy_recall, falling back to vector-only search")
             # $rankFusion unavailable — fall back to vector-only
             candidates = await self._strategy_vector_only(col, query_vec, limit, tags)
 
-        # Post-filter: accept flat 'strategy' 
+        # Post-filter: accept flat 'strategy'
         # Scoring: 0.6*position + 0.4*tag_overlap_ratio + hit_count log-norm boost.
         n = len(candidates)
         query_tags_set = set(tags) if tags else set()
@@ -981,7 +981,7 @@ class MemoryService:
             *([{"$match": {"tags": {"$in": tags}}}] if tags else []),
             {"$limit": limit * 3},
             {"$project": {"embedding": 0}},
-        ]        
+        ]
         try:
             docs: List[dict] = []
             async for doc in col.aggregate(pipeline):
@@ -1025,7 +1025,7 @@ class MemoryService:
             {"$project": {"embedding": 0}},
         ]
         docs: List[dict] = []
-        
+
         async for doc in col.aggregate(pipeline):
             docs.append(doc)
         return docs

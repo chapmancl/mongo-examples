@@ -22,7 +22,7 @@
         {
           "name": "MONGO_COL",
           "value": "listingsAndReviews"
-        },    
+        },
         {
           "name": "MONGO_DB",
           "value": "sample_airbnb"

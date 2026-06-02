@@ -19,7 +19,7 @@ class QueryProcessor:
 
     def __init__(self):
         """Initializes the QueryProcessor with configuration from settings.py.
-        
+
         Sets up Bedrock and MongoDB clients, and connects to the vector collection.
         """
         # Conversation history (starts empty)
@@ -27,19 +27,19 @@ class QueryProcessor:
         # AWS session objects
         self.bedrock_client = None
         self._create_bedrock_client()
-        
+
         # Initialize MongoDB client for vector search
         self.mongo_client = self._create_mongo_client()
         # Connect to the MongoDB collection for vectorized data
         self.collection = self._get_vector_collection()
-        
-        
+
+
     def _create_bedrock_client(self) -> None:
         self.bedrock_client = boto3.client(
             'bedrock-runtime',
             region_name=settings.aws_region
         )
-    
+
     def _create_mongo_client(self) -> MongoClient:
         # Connect to MongoDB Atlas using the URI and Server API version 1
         return MongoClient(settings.MongoURI, server_api=ServerApi('1'))
@@ -50,14 +50,14 @@ class QueryProcessor:
 
     def generate_embedding(self, text: str) -> list:
         """Generates an embedding for the input text using the given model.
-        
+
         Args:
             text: Input text to embed.
-        
+
         Returns:
             list: Embedding vector (list of floats) produced by the model.
         """
-        body = json.dumps({"inputText": text})        
+        body = json.dumps({"inputText": text})
         # Invoke the Bedrock embedding model (e.g., Titan Embeddings) specified in config
         response = self.bedrock_client.invoke_model(
             modelId=settings.EMBEDDING_MODEL_ID,
@@ -70,13 +70,13 @@ class QueryProcessor:
 
     def search_similar_documents(self, query_vector: list, filters: list = None, limit: int = 100, candidates: int = 3000) -> list:
         """Performs a vector search in MongoDB Atlas to find similar documents.
-        
+
         Args:
             query_vector: Query embedding vector to search with.
             filters: List of (key, value) tuples for metadata pre filtering (default: None).
             limit: Maximum number of results to return (default: 100).
             candidates: Number of candidate documents to consider (default: 1000).
-        
+
         Returns:
             list: List of json strings combining chunk text and metadata for each result.
         """
@@ -103,7 +103,7 @@ class QueryProcessor:
                     "space":0,
                     "transit":0,
                     "access":0,
-                    "score": {"$meta": "vectorSearchScore"},  # Include similarity score                    
+                    "score": {"$meta": "vectorSearchScore"},  # Include similarity score
                 }
             },
             {
@@ -113,7 +113,7 @@ class QueryProcessor:
             }
         ]
 
-        # Apply filters to narrow the search if provided        
+        # Apply filters to narrow the search if provided
         if filters:
             match_filter = {}
             if len(filters) > 1:
@@ -121,7 +121,7 @@ class QueryProcessor:
                 match_filter = {"$and": []}
                 for key, value in filters:
                     match_filter["$and"].append({key: value})
-                    
+
             else:
                 # Single filter case
                 key, value = filters[0]
@@ -132,31 +132,31 @@ class QueryProcessor:
         # Execute the vector search aggregation
         results = self.collection.aggregate(pipeline)
         # Combine chunk text and metadata into a single string for each result
-        bool_isfirst = True        
-        for result in results:            
-            if bool_isfirst: 
+        bool_isfirst = True
+        for result in results:
+            if bool_isfirst:
                 #print(result)
                 bool_isfirst =False
             if result["score"] > 0.50:
-                output.append(dumps(result))        
+                output.append(dumps(result))
         return output
-        
+
     def _invoke_claude(self, prompt: str) -> tuple:
         """Sends a prompt to Claude via Bedrock and updates conversation history.
-        
+
         Args:
             prompt: User prompt to send to the LLM.
-        
+
         Returns:
            assistant message (str)
         """
         # Initialize history if not provided
         if self.history is None:
             self.history = []
-        
+
         # Add the user prompt to the conversation history
         self.history.append({"role": "user", "content": [{"type": "text", "text": prompt}]})
-        
+
         # Prepare the request body for Claude's Messages API
         body = json.dumps({
             "messages": self.history,       # Full conversation history
@@ -174,7 +174,7 @@ class QueryProcessor:
             accept="application/json",
             body=body
         )
-        
+
         # Decode and parse the response
         response_body = response["body"].read().decode('utf-8')
         assistant_message = json.loads(response_body)["content"][0]["text"]
@@ -186,10 +186,10 @@ class QueryProcessor:
     def extract_filters(self, question: str) -> list or None:
         """Extracts metadata filters from a user question using regex patterns.
             This will be specific to the data in the vector collection. For this dataset we have member_id and field in the metadata section
-        
+
         Args:
             question: User question to analyze.
-        
+
         Returns:
             list or None: List of (key, value) tuples for filtering, or None if no filters found.
         """
@@ -199,8 +199,8 @@ class QueryProcessor:
         pattern = r'(?i)id=(\d{8})'
         match = self._split_filters(pattern, question)
         if match:
-            filters.append(("_id", match))             
-            print(f"found objectid, skipping vector search: {filters}")  
+            filters.append(("_id", match))
+            print(f"found objectid, skipping vector search: {filters}")
             return (filters, True)
 
         # Check for payment-related keywords (case-insensitive)
@@ -214,13 +214,13 @@ class QueryProcessor:
         match = self._split_filters(pattern, question)
         if match:
             filters.append(("address.market", match))
-        
+
         # Check for beds filter
         pattern = r'(?i)beds=(\d+)'
         match = self._split_filters(pattern, question)
         if match:
             filters.append(("beds", int(match)))
-        
+
         # Check for bedrooms filter
         pattern = r'(?i)bedrooms=(\d+)'
         match = self._split_filters(pattern, question)
@@ -247,11 +247,11 @@ class QueryProcessor:
     def query_claude(self, question: str, history: list or None = None) -> tuple:
         """Formats a question with optional context and sends it to Claude.  This is stateless in case we're calling from an API.
             The history would be stored in browser perhaps?
-        
+
         Args:
-            question: User question or full prompt 
-            history: optional list of historical questions and assistant answers. overwrites internal history      
-        
+            question: User question or full prompt
+            history: optional list of historical questions and assistant answers. overwrites internal history
+
         Returns:
             tuple: (assistant response (str), updated history (list))
         """
@@ -261,15 +261,15 @@ class QueryProcessor:
         # Invoke Claude with the formatted prompt
         assistant_message = self._invoke_claude(question)
         return assistant_message, self.history
-    
+
     def retrieve_aggregate_facts(self, question: str, history: list or None = None) -> tuple:
         """Processes a user question to retrieve and aggregate facts using vector search and LLM. This is stateless in case we're calling from an API.
             The history would be stored in browser perhaps?
-        
+
         Args:
             question: User question to process.
             history: optional list of historical questions and assistant answers. overwrites internal history
-        
+
         Returns:
             tuple: (LLM response (str), updated history (list))
         """
@@ -310,7 +310,7 @@ class QueryProcessor:
         if mongo_results:
             # Combine vector results into a single context string
             context = "\n".join(mongo_results)
-            # Query Claude with the question and vector search results as context 
+            # Query Claude with the question and vector search results as context
             start_time = time.time()
             try:
                 # Format the prompt with question and context if provided, otherwise just the question
@@ -321,10 +321,10 @@ class QueryProcessor:
                     self.history = self.history[2:]
             except ClientError as error:
                 # Handle AWS Bedrock errors
-                error_code = error.response['Error']['Code']                
+                error_code = error.response['Error']['Code']
                 if error_code == 'ValidationException':
                     # if input exceeds token limit just drop it all
-                    self.history = None 
+                    self.history = None
                     print("too much history, clearing...", error)
                 elif error_code in ['ExpiredTokenException', 'ExpiredToken']:
                     raise
@@ -338,7 +338,7 @@ class QueryProcessor:
 
     def run(self) -> None:
         """Runs an interactive loop on the command line to handle user questions.
-        
+
         Supports direct Claude queries (prefixed with 'ask'), MCP tool queries (prefixed with 'mcp'),
         or vector-backed fact retrieval.
         """
@@ -357,12 +357,12 @@ class QueryProcessor:
                 elif user_input.startswith("ask"):
                     # Direct Claude query without vector search
                     user_input = user_input.removeprefix("ask").strip()
-                    answer, history = self.query_claude(user_input)  
+                    answer, history = self.query_claude(user_input)
                 elif user_input.startswith("clear"):
                     self.history = None
                     answer = "history cleared..."
                 else:
-                    answer, history = self.retrieve_aggregate_facts(user_input) # don't need histroy here, but we would need to return it for a stateless API                    
+                    answer, history = self.retrieve_aggregate_facts(user_input) # don't need histroy here, but we would need to return it for a stateless API
                 if answer:
                     print(f"Answer: {answer}")
         except ClientError as error:
@@ -371,17 +371,17 @@ class QueryProcessor:
                 print("AWS Token has expired!", error)
             elif error_code == 'ValidationException':
                 # if input exceeds token limit just drop it all
-                self.history = None 
+                self.history = None
                 print("too much history, clearing...", error)
                 self.run()
             else:
-                # Log other errors                 
+                # Log other errors
                 print("Some other AWS client error occurred:", error.response)
         except KeyboardInterrupt:
             # Handle user interruption
             print("\nKeyboard interrupt received, exiting...")
 
-def main():    
+def main():
     processor = QueryProcessor()
     processor.run()
 

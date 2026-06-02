@@ -9,4 +9,3 @@ ENV PYTHONUNBUFFERED=1
 # Only rebuilt when requirements.base.txt changes.
 COPY requirements.base.txt .
 RUN pip install --no-cache-dir -r requirements.base.txt
-

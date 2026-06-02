@@ -13,6 +13,6 @@ flask
 flask-cors
 gunicorn
 
-# fastapi + asyncio-mqtt 
+# fastapi + asyncio-mqtt
 fastapi[standard]
 asyncio-mqtt

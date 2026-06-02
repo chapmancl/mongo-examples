@@ -24,7 +24,7 @@ class QueryResponse(BaseModel):
             self.history = self._sanitize_obj(self.history)
         if self.cache_stats is not None:
             self.cache_stats = self._sanitize_obj(self.cache_stats)
-        if self.message is not None:            
+        if self.message is not None:
             self.message = self._sanitize_obj(self.message)
         return self.model_dump_json()
 
@@ -63,7 +63,7 @@ class APIQueryProcessor:
         if self._impl is None and self._init_error is None:
             try:
                 self._impl = StreamingProcessor(self._handle_message)
-                self._init_error = None                
+                self._init_error = None
             except Exception as e:
                 self._init_error = e
                 raise RuntimeError(f"Initialization failed: {self._init_error}")
@@ -92,7 +92,7 @@ class APIQueryProcessor:
         except queue.Empty:
             pass
         return messages
-    
+
     def read_message_stream(self, timeout=0.1):
         """Generator that yields queued messages with optional timeout."""
         try:
@@ -106,7 +106,7 @@ class APIQueryProcessor:
             print(f"Error reading message stream: {e}")
 
     def clear_all_caches(self) -> None:
-        self._ensure_impl()            
+        self._ensure_impl()
         str_resp = self._impl.clear_all_caches()
         return QueryResponse(status="Clear Caches", message="Completed", history=self._impl.history)
 

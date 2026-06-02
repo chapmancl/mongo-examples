@@ -85,7 +85,7 @@ class ToolRouter:
 
     def _separate_memory_tools(self, tools: List[Dict[str, Any]]) -> tuple:
         """Separate tools into memory and non-memory categories.
-        
+
         Returns:
             Tuple of (memory_tools, non_memory_tools)
         """
@@ -101,7 +101,7 @@ class ToolRouter:
 
     def _separate_memory_tool_names(self, tool_names: List[str]) -> tuple:
         """Separate tool names into memory and non-memory categories.
-        
+
         Returns:
             Tuple of (memory_tool_names, non_memory_tool_names)
         """
@@ -251,11 +251,11 @@ class ToolRouter:
         self._last_selected_tools = None
 
         # Get all non-memory tools for the LLM to select from
-        non_memory_tools = [tool for tool in self.tool_catalog 
+        non_memory_tools = [tool for tool in self.tool_catalog
                            if not self._is_memory_tool(tool.get("toolSpec", {}).get("name", ""))]
-        memory_tools = [tool for tool in self.tool_catalog 
+        memory_tools = [tool for tool in self.tool_catalog
                        if self._is_memory_tool(tool.get("toolSpec", {}).get("name", ""))]
-        
+
         tool_summary = [
             {"name": name, "description": spec.get("toolSpec", {}).get("description", "")}
             for name, spec in self._by_name.items()
@@ -284,10 +284,10 @@ class ToolRouter:
         selected_names = routing["tools"]
         pattern = routing.get("pattern")
         filtered = [self._by_name[n] for n in selected_names if n in self._by_name]
-        
+
         # Always add memory tools back (they're always available, never routed)
         filtered.extend(memory_tools)
-        
+
         self._last_pattern = pattern
         # Store only non-memory selected names for pattern cache
         self._last_selected_tools = [n for n in selected_names if not self._is_memory_tool(n)]

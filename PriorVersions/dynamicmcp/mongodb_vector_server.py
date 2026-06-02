@@ -26,27 +26,27 @@ class MongoDBVectorServer(MongoDBClient):
         self.tool_config = None
         self.tool_name = None
         self.description = "MongoDB Vector Search MCP Server"
-    
+
     def set_config(self, config: Dict) -> None:
         """Set the tool configuration from a dictionary. this overrides the default settings"""
         if config is None:
             raise ValueError("Config cannot be None. Check env variables and AWS secrets.")
-        
+
         self.tool_config = config
         self.tool_name  = config["Name"]
         self.description = config["module_info"]["description"]
         print(f"Using settings from tool config {self.tool_name}")
         super().set_config(config["module_info"])
-            
+
     async def get_mongo_info(self, shortResponse=False) -> Tuple[bool, Dict[str, Any]]:
         """
         Retrieve MongoDB connection and collection health information.
-        
+
         This function performs a health check on the MongoDB connection and gathers
         essential database statistics including connection status, collection metrics,
         and server information. It's designed to be used for monitoring, debugging,
         and health check endpoints.
-                
+
         Returns:
             Tuple[bool, Dict[str, Any]]: A tuple containing:
                 - bool: Failed flag (True if any operation failed, False if all succeeded)
@@ -54,49 +54,49 @@ class MongoDBVectorServer(MongoDBClient):
                     - status: "healthy" or "unhealthy"
                     - version: MongoDB server version
                     - mongodb: Nested dict with connection details
-                    - error: Error message (only present if operation failed)        
+                    - error: Error message (only present if operation failed)
         """
         failed = True
         health_status = {
             "status": "unhealthy",
-            "toolname": self.tool_name,        
-            "mongodb": {                
+            "toolname": self.tool_name,
+            "mongodb": {
                 "database": self._db_name,
                 "collection": self._collection_name
             }
         }
         ping_result = None
         try:
-            # Ensure connection is established            
+            # Ensure connection is established
             ping_result = await self.ensure_connection()
-            
+
             if ping_result and ping_result.get("ok", 0) == 1.0:
-                is_connected = True                
+                is_connected = True
             else:
                 is_connected = False
                 health_status["error"] = "MongoDB Connection failed"
                 failed = True
-            
+
             health_status["mongodb"]["connected"] = is_connected
             if is_connected:
 
                 # Convert MongoDB Timestamp object to datetime
                 cluster_time = ping_result["$clusterTime"]["clusterTime"]
                 health_status["mongodb"]["timestamp"] = str(datetime.datetime.fromtimestamp(cluster_time.time).isoformat())
-                health_status["status"] = "healthy"                
+                health_status["status"] = "healthy"
                 failed = False
-                
+
                 if not shortResponse:
                     # Get server info and collection stats
-                    server_info, collection_stats = await asyncio.gather(                
+                    server_info, collection_stats = await asyncio.gather(
                         self.client.server_info(),
                         self.db.command("collStats", self._collection_name)
-                    )   
+                    )
                     health_status["version"] = server_info.get("version", "unknown")
                     health_status["mongodb"]["document_count"] = collection_stats.get("count", 0)
-                    health_status["mongodb"]["size_bytes"] = collection_stats.get("size", 0)        
-                
-        except Exception as e:                        
+                    health_status["mongodb"]["size_bytes"] = collection_stats.get("size", 0)
+
+        except Exception as e:
             health_status["error"]= str(e)
             logger.error(f"Health check failed: {e}")
 
@@ -104,14 +104,14 @@ class MongoDBVectorServer(MongoDBClient):
 
     async def generate_embedding(self, text: str) -> list:
         """Generates an embedding for the input text using the given model.
-        
+
         Args:
             text: Input text to embed.
-        
+
         Returns:
             list: Embedding vector (list of floats) produced by the model.
         """
-        body = json.dumps({"inputText": text})        
+        body = json.dumps({"inputText": text})
         # Invoke the Bedrock embedding model (e.g., Titan Embeddings) specified in config
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(
@@ -125,16 +125,16 @@ class MongoDBVectorServer(MongoDBClient):
         )
         # Parse the response and extract the embedding vector
         return json.loads(response["body"].read())["embedding"]
-    
+
     async def vector_search(self, query_string: str, filters: list = None, limit: int = 10, num_candidates: int = 100) -> List[Dict[str, Any]]:
         """
         Perform vector search using MongoDB's $search aggregation pipeline
-        
+
         Args:
             query_string: The query string for similarity search
             limit: Maximum number of results to return
             num_candidates: Number of candidates to consider during search
-            
+
         Returns:
             List of search results with similarity scores
         """
@@ -148,7 +148,7 @@ class MongoDBVectorServer(MongoDBClient):
                 {
                     "$vectorSearch": {
                         "index": self.tool_config['tools']['vector_search']['index'],
-                        "path": "embedding", 
+                        "path": "embedding",
                         "queryVector": query_vector,
                         "numCandidates": num_candidates,
                         "limit": limit
@@ -168,8 +168,8 @@ class MongoDBVectorServer(MongoDBClient):
                     }
                 }
             ]
-            
-            # Apply filters to narrow the search if provided        
+
+            # Apply filters to narrow the search if provided
             if filters:
                 match_filter = {}
                 if len(filters) > 1:
@@ -177,33 +177,33 @@ class MongoDBVectorServer(MongoDBClient):
                     match_filter = {"$and": []}
                     for key, value in filters:
                         match_filter["$and"].append({key: value})
-                        
+
                 else:
                     # Single filter case
                     key, value = filters[0]
                     match_filter[key] = value
-                
+
                 # Inject the filter into the pipeline
                 pipeline[0]["$vectorSearch"]["filter"] = match_filter
-            
+
             results = []
             async for doc in self.collection.aggregate(pipeline):
                 results.append(doc)
             #logger.info(f"Vector search returned {len(results)} results")
             return results
-            
+
         except PyMongoError as e:
             logger.error(f"Vector search failed: {e}")
             raise
-    
+
     async def text_search(self, query_text: str, limit: int = 10) -> List[Dict[str, Any]]:
         """
         Perform text search using MongoDB's $search aggregation pipeline
-        
+
         Args:
             query_text: The text query for search
             limit: Maximum number of results to return
-            
+
         Returns:
             List of search results with relevance scores
         """
@@ -237,13 +237,13 @@ class MongoDBVectorServer(MongoDBClient):
                     }
                 }
             ]
-            
+
             results = []
             async for doc in self.collection.aggregate(pipeline):
                 results.append(doc)
             logger.info(f"Text search returned {len(results)} results")
             return results
-            
+
         except PyMongoError as e:
             logger.error(f"Text search failed: {e}")
             raise
@@ -251,22 +251,22 @@ class MongoDBVectorServer(MongoDBClient):
     async def agg_pipeline(self, pipeline: List[Dict]) -> List[Dict[str, Any]]:
         """
         Perform MongoDB's aggregation pipeline
-        
+
         Args:
-            pipeline: The pipeline to execute (list of aggregation stages)            
-            
+            pipeline: The pipeline to execute (list of aggregation stages)
+
         Returns:
             List of results
         """
         try:
             await self.ensure_connection()
-            # MongoDB Atlas aggregation pipeline                        
+            # MongoDB Atlas aggregation pipeline
             results = []
             async for doc in self.collection.aggregate(pipeline):
                 results.append(doc)
             logger.info(f"pipeline returned {len(results)} results")
             return results
-            
+
         except PyMongoError as e:
             logger.error(f"pipeline query failed: {e}")
             raise

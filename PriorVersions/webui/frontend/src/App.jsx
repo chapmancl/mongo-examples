@@ -28,11 +28,11 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ input: question, history }),
       })
-      
+
       if (!res.ok && res.status !== 404) {
         throw new Error(data.error || 'API error')
       }
-      
+
       // If streaming available, read NDJSON stream and update live/status/history
       if (res.ok && res.body) {
         const reader = res.body.getReader()
