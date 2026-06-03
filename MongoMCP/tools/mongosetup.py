@@ -72,6 +72,7 @@ MEMORY_EPISODIC_VECTOR_INDEX_CONFIG = {
 		{"type": "filter", "path": "importance"},
 		{"type": "filter", "path": "expires_at"},
 		{"type": "filter", "path": "is_isolated"},
+		{"type": "filter", "path": "scope"},
 	]
 }
 
@@ -85,6 +86,7 @@ MEMORY_SEMANTIC_VECTOR_INDEX_CONFIG = {
 		{"type": "filter", "path": "entities"},
 		{"type": "filter", "path": "session_id"},
 		{"type": "filter", "path": "is_isolated"},
+		{"type": "filter", "path": "scope"},
 	]
 }
 
@@ -105,6 +107,10 @@ MEMORY_COLLECTIONS = ["memory_episodic", "memory_semantic"]
 
 MEMORY_EPISODIC_VECTOR_INDEX_NAME = "memory_episodic_vector_index"
 MEMORY_SEMANTIC_VECTOR_INDEX_NAME = "memory_semantic_vector_index"
+
+# Compound regular index for efficient scope-based queries.
+MEMORY_SCOPE_INDEX_NAME = "memory_scope_compound_idx"
+MEMORY_SCOPE_INDEX_SPEC = [("scope", 1), ("agent_id", 1), ("username", 1), ("session_id", 1)]
 
 
 def _load_settings(use_aws: bool):
@@ -251,6 +257,103 @@ def create_memory_semantic_fulltext_index(mongo_client: MongoDBClient) -> None:
 	print(f"Created fulltext index: {MEMORY_DB_NAME}.memory_semantic.{MEMORY_SEMANTIC_FULLTEXT_INDEX_NAME}")
 
 
+def create_mcp_cache_indexes(mongo_client: MongoDBClient) -> None:
+	"""Create indexes on mcp_cache for both embedded and per-document cache modes.
+
+	Embedded mode (tool_discovery): one doc per (username, session_id) — already
+	unique-indexed by the MongoSessionCache itself on first use.
+
+	Per-document mode (tool_response): one doc per cache entry — requires a
+	compound unique index and a TTL index for automatic expiry.
+	"""
+	collection = mongo_client.client["mcp_config"]["mcp_cache"]
+	existing = {idx["name"] for idx in collection.list_indexes()}
+
+	# Drop the old (username, session_id) unique index if it still exists — it conflicts
+	# with per-document mode entries that share the same (username, session_id).
+	emb_old_idx = "mcp_cache_username_session_id_unique"
+	if emb_old_idx in existing:
+		collection.drop_index(emb_old_idx)
+		print(f"Dropped old index: mcp_config.mcp_cache.{emb_old_idx}")
+
+	# Embedded mode: unique per (username, session_id, cache_object_name) for docs with doc_type="embedded".
+	# Partial filter uses doc_type equality — Atlas supports $eq in partial filter expressions.
+	emb_idx = "mcp_cache_embedded_unique"
+	if emb_idx not in existing:
+		collection.create_index(
+			[("username", 1), ("session_id", 1), ("cache_object_name", 1)],
+			unique=True,
+			partialFilterExpression={"doc_type": {"$eq": "embedded"}},
+			name=emb_idx,
+		)
+		print(f"Created index: mcp_config.mcp_cache.{emb_idx}")
+	else:
+		print(f"Index already exists: mcp_config.mcp_cache.{emb_idx}")
+
+	# Per-document mode: unique per cache entry.
+	entry_idx = "mcp_cache_entry_unique"
+	if entry_idx not in existing:
+		collection.create_index(
+			[("username", 1), ("session_id", 1), ("cache_object_name", 1), ("cache_key", 1)],
+			unique=True,
+			sparse=True,  # docs without cache_key (embedded mode) are excluded
+			name=entry_idx,
+		)
+		print(f"Created index: mcp_config.mcp_cache.{entry_idx}")
+	else:
+		print(f"Index already exists: mcp_config.mcp_cache.{entry_idx}")
+
+	# TTL index — MongoDB auto-deletes per-document entries when expires_at is reached.
+	ttl_idx = "mcp_cache_entry_ttl"
+	if ttl_idx not in existing:
+		collection.create_index(
+			[("expires_at", 1)],
+			expireAfterSeconds=0,
+			sparse=True,  # embedded-mode docs have no expires_at
+			name=ttl_idx,
+		)
+		print(f"Created TTL index: mcp_config.mcp_cache.{ttl_idx}")
+	else:
+		print(f"TTL index already exists: mcp_config.mcp_cache.{ttl_idx}")
+
+
+def create_memory_scope_compound_index(mongo_client: MongoDBClient) -> None:
+	"""Create a compound regular index on {scope, agent_id, username, session_id} for both memory collections.
+
+	Also runs a migration to backfill scope=0 (SCOPE_SHARED) on any document that
+	has no scope field yet, preserving backwards compatibility with legacy docs.
+	"""
+	from pymongo import ASCENDING, IndexModel as PyIndexModel
+
+	for coll_name in MEMORY_COLLECTIONS:
+		collection = mongo_client.client[MEMORY_DB_NAME][coll_name]
+
+		# Check for the index by key spec — it may exist under an auto-generated name.
+		existing_indexes = list(collection.list_indexes())
+		existing_names = {idx["name"] for idx in existing_indexes}
+		target_key = dict(MEMORY_SCOPE_INDEX_SPEC)
+		scope_index_exists = any(
+			dict(idx.get("key", {})) == target_key
+			for idx in existing_indexes
+		)
+
+		if not scope_index_exists:
+			collection.create_index(MEMORY_SCOPE_INDEX_SPEC, name=MEMORY_SCOPE_INDEX_NAME)
+			print(f"Created compound scope index: {MEMORY_DB_NAME}.{coll_name}.{MEMORY_SCOPE_INDEX_NAME}")
+		else:
+			print(f"Compound scope index already exists: {MEMORY_DB_NAME}.{coll_name} (skipping)")
+
+		# Migration: set scope=0 on legacy docs without the field.
+		result = collection.update_many(
+			{"scope": {"$exists": False}},
+			{"$set": {"scope": 0}},
+		)
+		if result.modified_count:
+			print(f"  Migrated {result.modified_count} legacy docs to scope=0 in {coll_name}")
+		else:
+			print(f"  No legacy docs to migrate in {coll_name}")
+
+
 def create_and_insert_agent_identity(
 	settings,
 	mongo_client: MongoDBClient,
@@ -278,16 +381,23 @@ def create_and_insert_agent_identity(
 def run_setup(
 	seed_agent_identity: bool = True,
 	agent_name: str = "webui_chatuser",
+	load_tools: bool = False,
+	use_aws: bool = False,
 ) -> None:
-	settings = _load_settings(use_aws=False)
+	settings = _load_settings(use_aws=use_aws)
 	create_mcp_config_collections(settings)
 
 	mongo_client = MongoDBClient(settings=settings)
 	mongo_client.sync_connect_to_mongodb()
-	load_and_insert_mcp_tools(settings, mongo_client)
+	if load_tools:
+		load_and_insert_mcp_tools(settings, mongo_client)
+	else:
+		print("Skipping mcp_tools load (use --load-tools to overwrite)")
 	create_airbnb_vector_search_index(mongo_client)
+	create_mcp_cache_indexes(mongo_client)
 	create_memory_vector_search_indexes(mongo_client)
 	create_memory_semantic_fulltext_index(mongo_client)
+	create_memory_scope_compound_index(mongo_client)
 	if seed_agent_identity:
 		create_and_insert_agent_identity(
 			settings=settings,
@@ -314,11 +424,25 @@ def main() -> None:
 		default="webui_chatuser",
 		help="Agent name used when --seed-agent-identity is provided",
 	)
+	parser.add_argument(
+		"--load-tools",
+		action="store_true",
+		default=False,
+		help="Overwrite mcp_config.mcp_tools from mcp_config.mcp_tools.json (destructive — off by default)",
+	)
+	parser.add_argument(
+		"--aws",
+		action="store_true",
+		default=False,
+		help="Use AWS_settings.py credentials instead of local_settings.py",
+	)
 	args = parser.parse_args()
 
 	run_setup(
 		seed_agent_identity=args.seed_agent_identity,
 		agent_name=args.agent_name,
+		load_tools=args.load_tools,
+		use_aws=args.aws,
 	)
 
 

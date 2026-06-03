@@ -1,6 +1,23 @@
 settings.py
 *.tf
 
+# Large dirs not needed in Docker build
+agentcore-runtimes/
+awscliv2.zip
+aws/
+
+# Python venv in root
+lib/
+lib64
+include/
+bin/
+
+# Terraform state
+*.tfstate
+*.tfstate.backup
+*.tfvars
+*.tfvars.example
+
 # Python virtual environments
 venv/
 env/

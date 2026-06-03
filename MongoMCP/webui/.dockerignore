@@ -1,5 +1,14 @@
 *.tf
 
+# Frontend build output (rebuilt inside Docker)
+frontend/dist/
+frontend/.vite/
+frontend/node_modules/
+
+# Logs
+*.log
+claimlog.log
+
 # Python virtual environments
 venv/
 env/

@@ -35,12 +35,15 @@ def build_memory_tool_fns(svc: MemoryService):
         tags: Optional[List[str]] = None,
         entities: Optional[List[str]] = None,
         payload: Optional[Dict[str, Any]] = None,
+        payload_push: Optional[Dict[str, Any]] = None,
         username: Optional[str] = None,
         agent_id: Optional[str] = None,
         schema_version: Optional[str] = None,
-        is_isolated: bool = False,
+        scope: int = -1,
+        related_docs: Optional[List[Dict[str, Any]]] = None,
+        _id: Optional[str] = None,
     ) -> dict:
-        """Store a memory in the episodic collection with auto-linking to similar memories."""
+        """Store a memory in the appropriate collection with optional explicit related_docs links and near-duplicate warning."""
         try:
             return await svc.intake(
                 content=content,
@@ -51,10 +54,13 @@ def build_memory_tool_fns(svc: MemoryService):
                 tags=tags,
                 entities=entities,
                 payload=payload,
+                payload_push=payload_push,
                 username=username,
                 agent_id=agent_id,
                 schema_version=schema_version,
-                is_isolated=is_isolated,
+                scope=scope,
+                related_docs=related_docs,
+                _id=_id,
             )
         except Exception as exc:
             logger.error("intake failed: %s", exc)
@@ -62,7 +68,7 @@ def build_memory_tool_fns(svc: MemoryService):
             return {"error": f"intake failed: {exc}"}
 
     async def recall(
-        query: str,
+        query: Optional[str] = None,
         session_id: Optional[str] = None,
         agent_id: Optional[str] = None,
         username: Optional[str] = None,
@@ -74,8 +80,11 @@ def build_memory_tool_fns(svc: MemoryService):
         memory_types: Optional[List[str]] = None,
         tags: Optional[List[str]] = None,
         entities: Optional[List[str]] = None,
+        depth: int = 1,
+        depth_relations: Optional[List[str]] = None,
+        output_format: str = "default",
     ) -> dict:
-        """Recall relevant memories using semantic vector search with one-hop graph expansion and composite scoring."""
+        """Recall memories via semantic vector search or direct entity filter, with multi-hop BFS graph expansion and composite scoring."""
         try:
             return await svc.recall(
                 query=query,
@@ -90,16 +99,39 @@ def build_memory_tool_fns(svc: MemoryService):
                 memory_types=memory_types,
                 tags=tags,
                 entities=entities,
+                depth=depth,
+                depth_relations=depth_relations,
+                output_format=output_format,
             )
         except Exception as exc:
             logger.error("recall failed: %s", exc)
             logger.debug("".join(traceback.format_exception(None, exc, exc.__traceback__)))
             return {"error": f"recall failed: {exc}"}
 
-    async def reflect(session_id: str, keep_session: bool = False) -> dict:
-        """Summarise all session memories with the LLM and store the result as a session:summary memory."""
+    async def reflect(
+        session_id: Optional[str] = None,
+        operation: str = "summarise",
+        memory_ids: Optional[List[str]] = None,
+        target_ids: Optional[List[str]] = None,
+        link_relation: str = "linked",
+        inverse_relation: Optional[str] = None,
+        entities: Optional[List[str]] = None,
+        agent_id: Optional[str] = None,
+        username: Optional[str] = None,
+    ) -> dict:
+        """Multi-operation memory maintenance: summarise a session (storing agent_id + username on the summary), create explicit bidirectional links, or set entities on existing memories."""
         try:
-            return await svc.reflect(session_id=session_id, keep_session=keep_session)
+            return await svc.reflect(
+                session_id=session_id,
+                operation=operation,
+                memory_ids=memory_ids,
+                target_ids=target_ids,
+                link_relation=link_relation,
+                inverse_relation=inverse_relation,
+                entities=entities,
+                agent_id=agent_id,
+                username=username,
+            )
         except Exception as exc:
             logger.error("reflect failed: %s", exc)
             logger.debug("".join(traceback.format_exception(None, exc, exc.__traceback__)))
@@ -111,8 +143,9 @@ def build_memory_tool_fns(svc: MemoryService):
         scope: str = "episodic",
         sort_by: str = "created_at",
         sort_dir: str = "desc",
+        ids: Optional[List[str]] = None,
     ) -> dict:
-        """Query memories by filter dict, scope (episodic | strategies), and sort options."""
+        """Query memories by filter dict, scope (episodic | strategies), sort options, or direct ID list."""
         try:
             return await svc.query(
                 filter=filter,
@@ -120,6 +153,7 @@ def build_memory_tool_fns(svc: MemoryService):
                 scope=scope,
                 sort_by=sort_by,
                 sort_dir=sort_dir,
+                ids=ids,
             )
         except Exception as exc:
             logger.error("query failed: %s", exc)
@@ -161,29 +195,43 @@ def build_memory_tool_fns(svc: MemoryService):
 
     async def strategy_store(
         name: str,
-        description: str,
+        context: str,
+        _id: Optional[str] = None,
         tags: Optional[List[str]] = None,
+        entities: Optional[List[str]] = None,
+        username: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        scope: int = -1,
         session_id: Optional[str] = None,
-        pipeline_template: Optional[Dict[str, Any]] = None,
-        filter_template: Optional[Dict[str, Any]] = None,
-        shard_keys: Optional[List[str]] = None,
-        metadata_requirements: Optional[List[str]] = None,
+        importance: float = 0.90,
+        decay_rate: float = 0.001,
+        memory_type: str = "strategy",
         payload: Optional[Dict[str, Any]] = None,
         schema_version: Optional[str] = None,
+        superseded_by: Optional[str] = None,
+        related_doc_ids: Optional[List[str]] = None,
+        link_relation: str = "related",
     ) -> dict:
-        """Store or update a reusable retrieval strategy. memory_type is set to 'strategy:<name>'."""
+        """Store a new strategy version (insert) or update an existing one (_id supplied). context is embedded and stored as content."""
         try:
             return await svc.strategy_store(
                 name=name,
-                description=description,
+                context=context,
+                _id=_id,
                 tags=tags,
+                entities=entities,
+                username=username,
+                agent_id=agent_id,
+                scope=scope,
                 session_id=session_id,
-                pipeline_template=pipeline_template,
-                filter_template=filter_template,
-                shard_keys=shard_keys,
-                metadata_requirements=metadata_requirements,
+                importance=importance,
+                decay_rate=decay_rate,
+                memory_type=memory_type,
                 payload=payload,
                 schema_version=schema_version,
+                superseded_by=superseded_by,
+                related_doc_ids=related_doc_ids,
+                link_relation=link_relation,
             )
         except Exception as exc:
             logger.error("strategy_store failed: %s", exc)
@@ -194,10 +242,11 @@ def build_memory_tool_fns(svc: MemoryService):
         query: Optional[str] = None,
         name: Optional[str] = None,
         limit: int = 5,
-        similarity_threshold: float = 0.0,
+        similarity_threshold: float = 0.5,
         tags: Optional[List[str]] = None,
+        include_history: bool = False,
     ) -> dict:
-        """Recall strategies. name → exact lookup; query → semantic $rankFusion (vector+BM25); tags only (no query) → exact tag match sorted by hit_count; nothing → top strategies by hit_count."""
+        """Recall strategies. name → most recent version (include_history=True for all versions); query → semantic $rankFusion; tags only → exact tag match sorted by hit_count; nothing → top by hit_count."""
         try:
             return await svc.strategy_recall(
                 query=query,
@@ -205,6 +254,7 @@ def build_memory_tool_fns(svc: MemoryService):
                 limit=limit,
                 similarity_threshold=similarity_threshold,
                 tags=tags,
+                include_history=include_history,
             )
         except Exception as exc:
             logger.error("strategy_recall failed: %s", exc)
@@ -216,7 +266,7 @@ def build_memory_tool_fns(svc: MemoryService):
         try:
             result = await svc.get_instructions()
             instr = result.get("instructions", "")
-            logger.info("[PIPELINE] tools.get_instructions: result instructions len=%d", len(instr))
+            logger.debug("[PIPELINE] tools.get_instructions: result instructions len=%d", len(instr))
             return result
         except Exception as exc:
             logger.error("get_instructions failed: %s", exc)

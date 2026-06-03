@@ -80,8 +80,18 @@ class ToolRouter:
 
     @staticmethod
     def _is_memory_tool(tool_name: str) -> bool:
-        """Check if a tool belongs to the memory layer."""
-        return tool_name in ToolRouter._MEMORY_TOOL_NAMES
+        """Check if a tool belongs to the memory layer.
+
+        Handles both bare names (``intake``) as registered on the MCP server
+        and endpoint-prefixed names (``memory_intake``) as they appear in the
+        webui's tool catalog after the ``{endpoint}_`` prefix is applied.
+        """
+        if tool_name in ToolRouter._MEMORY_TOOL_NAMES:
+            return True
+        # Handle "memory_<bare>" prefix produced by _fetch_endpoint in the webui.
+        if tool_name.startswith("memory_"):
+            return tool_name[len("memory_"):] in ToolRouter._MEMORY_TOOL_NAMES
+        return False
 
     def _separate_memory_tools(self, tools: List[Dict[str, Any]]) -> tuple:
         """Separate tools into memory and non-memory categories.

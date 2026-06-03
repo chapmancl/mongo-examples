@@ -88,6 +88,10 @@ class CachedQueryProcessor:
         self._memory_fns: Dict[str, Any] = {}  # populated in generate_toolconfig after llm_client ready
         self._memory_toolspecs = get_memory_bedrock_toolspecs()
 
+        # Session context pre-fetch — runs once per processor instance on first LLM turn.
+        self._context_prefetched: bool = False
+        self._session_context_block: Optional[str] = None
+
         self.generate_toolconfig()
 
     @staticmethod
@@ -190,7 +194,7 @@ class CachedQueryProcessor:
             if cached is not None:
                 if cached.get("cache_version") == self._CACHE_VERSION:
                     self.message_handler("Using cached MCP tools discovery")
-                    self._apply_cached_state(cached)
+                    await self._apply_cached_state(cached)
                     return
                 self.message_handler("Stale tool discovery cache (version mismatch), re-fetching", status="Discovering Tools")
                 await self._tool_discovery_cache.clear()
@@ -208,8 +212,10 @@ class CachedQueryProcessor:
         bedrock_tools = []
         root_frmt = f"{self.settings.mongo_mcp_root}/{{}}/mcp"
 
+        _SYSTEM_ENDPOINTS = {"memory", "agent"}
         results = await asyncio.gather(*[
             self._fetch_endpoint_data(name, root_frmt) for name in self.mcp_endpoints
+            if name not in _SYSTEM_ENDPOINTS
         ])
         for name, config, tools, collection_info, agent_prompt in results:
             self.mcp_endpoint_configs[name] = config
@@ -221,7 +227,7 @@ class CachedQueryProcessor:
         if self.mcp_endpoint_configs:
             self.mcp_client = fastmcp.Client({"mcpServers": self.mcp_endpoint_configs})
 
-        self._configure_llm_client(bedrock_tools)
+        await self._configure_llm_client(bedrock_tools)
         self.message_handler(f"Using {len(bedrock_tools)} tools from {len(self.mcp_endpoints)} endpoint(s)", status="Tools Ready")
 
         if self.enable_mcp_tool_caching:
@@ -278,16 +284,16 @@ class CachedQueryProcessor:
 
         return name, config, tools, collection_info, agent_prompt
 
-    def _apply_cached_state(self, cached: dict) -> None:
+    async def _apply_cached_state(self, cached: dict) -> None:
         """Restore full instance state — endpoints, tools, and LLM client — from a cached discovery payload."""
         self.mcp_endpoints = cached.get("endpoints", [])
         self.mcp_endpoint_configs = cached.get("endpoint_configs", {})
         self.mongo_collection_info = cached.get("collection_info", {})
         self._agent_prompts = cached.get("agent_prompts", {})
         self.mcp_client = fastmcp.Client({"mcpServers": self.mcp_endpoint_configs}) if self.mcp_endpoint_configs else None
-        self._configure_llm_client(cached.get("tools", []))
+        await self._configure_llm_client(cached.get("tools", []))
 
-    def _configure_llm_client(self, bedrock_tools: list) -> None:
+    async def _configure_llm_client(self, bedrock_tools: list) -> None:
         """Set the system prompt, register tools on the LLM client, and initialize the ToolRouter."""
         # Build memory dispatch table now that llm_client is ready (needs embedding capability).
         if not self._memory_fns:
@@ -312,11 +318,31 @@ class CachedQueryProcessor:
         if memory_additions:
             logger.info("Injected %d memory toolspecs into tool catalog", len(memory_additions))
 
-        self._system_prompt = [
-            {"text": t}
-            for t in getattr(self.settings, "BEDROCK_SYSTEM_PROMPT_TEXTS", [])
-        ]
-        print("System prompt:", self._system_prompt)
+        # Fetch master + webui instructions from DB (versionable, no redeploy needed).
+        # master_instructions: shared Memory Agent Blueprint (scope=0)
+        # dynamicmcp_webui_instructions: webui-specific overrides (output format, tool prefs, identity)
+        db_prompts = []
+        if self._memory_fns and "strategy_recall" in self._memory_fns:
+            for strategy_name in ("master_instructions", "dynamicmcp_webui_instructions"):
+                try:
+                    result = await self._memory_fns["strategy_recall"](name=strategy_name)
+                    strategies = result.get("strategies") or result.get("results", [])
+                    if strategies:
+                        content = strategies[0].get("content", "")
+                        if content:
+                            db_prompts.append(content)
+                            logger.info("Loaded %s from DB (%d chars)", strategy_name, len(content))
+                    else:
+                        logger.info("Strategy not found in DB: %s", strategy_name)
+                except Exception as exc:
+                    logger.warning("Failed to load strategy %s: %s", strategy_name, exc)
+
+        if db_prompts:
+            self._system_prompt = [{"text": t} for t in db_prompts]
+        else:
+            fallback = getattr(self.settings, "BEDROCK_SYSTEM_PROMPT_TEXTS", [])
+            logger.info("No DB strategies loaded; using settings fallback (%d entries)", len(fallback))
+            self._system_prompt = [{"text": t} for t in fallback]
         for endpoint_name, agent_prompt in self._agent_prompts.items():
             cleaned = self._normalize_agent_prompt(agent_prompt)
             if cleaned:
@@ -344,6 +370,64 @@ class CachedQueryProcessor:
             memory_fns=self._memory_fns,
         )
 
+
+    async def _prefetch_session_context(self, username: str) -> str:
+        """Pre-fetch recent sessions and user preferences before the first LLM turn.
+
+        Runs two parallel DB queries (list_sessions + recall user_preference) and returns
+        a formatted Markdown block injected into the system prompt as pre-loaded context.
+        Falls back gracefully — callers should always get a string back.
+        """
+        from datetime import datetime, timezone
+        fetched_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        sessions_text = ""
+        prefs_text = ""
+        try:
+            sessions_res, prefs_res = await asyncio.gather(
+                self._memory_fns["list_sessions"](filter={"username": username}, limit=5),
+                self._memory_fns["recall"](
+                    query="preferences working style tools interests",
+                    username=username,
+                    memory_types=["user_preference"],
+                    limit=5,
+                ),
+                return_exceptions=True,
+            )
+
+            if not isinstance(sessions_res, Exception) and "error" not in sessions_res:
+                sessions = sessions_res.get("sessions", sessions_res.get("results", []))
+                if sessions:
+                    lines = []
+                    for s in sessions[:5]:
+                        sid = s.get("session_id") or s.get("_id", "?")
+                        summary = s.get("summary") or s.get("content") or ""
+                        lines.append(f"- {sid}: {summary[:120]}")
+                    sessions_text = "### Recent Sessions\n" + "\n".join(lines)
+
+            if not isinstance(prefs_res, Exception) and "error" not in prefs_res:
+                prefs = prefs_res.get("results", [])
+                if prefs:
+                    lines = [f"- {p.get('content', '')[:150]}" for p in prefs[:5]]
+                    prefs_text = "### User Preferences\n" + "\n".join(lines)
+
+        except Exception as exc:
+            logger.warning("Session pre-fetch error: %s", exc)
+
+        header = (
+            f"## Pre-loaded Session Context\n"
+            f"**context_loaded:** true  \n"
+            f"**username:** {username}  \n"
+            f"**fetched_at:** {fetched_at}"
+        )
+        sections = [header]
+        if sessions_text:
+            sections.append(sessions_text)
+        if prefs_text:
+            sections.append(prefs_text)
+        if len(sections) == 1:
+            sections.append("*(no prior session data found)*")
+        return "\n\n".join(sections)
 
     async def _call_mcp_tool(self, toolname: str, tool_input: dict) -> str:
         """Initialize a stateless session for tool calls."""
@@ -629,6 +713,20 @@ class CachedQueryProcessor:
         self.llm_client.message_handler = self.message_handler
 
         async def _invoke(msgs):
+            # Once per session (first message): pre-fetch recent sessions + user preferences
+            # and inject as a structured context block into the system prompt.
+            if not self._context_prefetched and user_id and self._memory_fns:
+                try:
+                    self._session_context_block = await self._prefetch_session_context(user_id)
+                    logger.info(
+                        "Session context pre-fetched for user=%s (%d chars)",
+                        user_id, len(self._session_context_block),
+                    )
+                except Exception as _pf_exc:
+                    logger.warning("Session pre-fetch failed: %s", _pf_exc)
+                    self._session_context_block = "## Pre-loaded Session Context\n**context_loaded:** false"
+                self._context_prefetched = True
+
             tools_for_question, hint_text = [], None
             was_cache_hit = False
             llm_routing_ran = False  # tracks whether LLM routing made an explicit decision
@@ -673,7 +771,11 @@ class CachedQueryProcessor:
                     user_block.append({"text": f"\n\n{hint_text}"})
                     logger.info("Injected playbook hint into user message")
 
-            self.llm_client.system = self._system_prompt
+            # Build effective system prompt: base instructions + pre-fetched session context block.
+            effective_system = list(self._system_prompt)
+            if self._session_context_block:
+                effective_system.append({"text": self._session_context_block})
+            self.llm_client.system = effective_system
 
             # Snapshot msgs before the LLM loop mutates it (appends assistant/tool messages).
             # Needed for a potential retry with the full tool catalog.

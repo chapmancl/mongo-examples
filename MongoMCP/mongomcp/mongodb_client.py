@@ -1,6 +1,8 @@
+import contextvars
 import logging
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from pymongo.errors import PyMongoError
+from pymongo import monitoring
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection, AsyncIOMotorDatabase
 import pymongo
 from bson import json_util, ObjectId
@@ -8,6 +10,76 @@ import requests
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
+
+# ---------------------------------------------------------------------------
+# Query capture infrastructure
+# ---------------------------------------------------------------------------
+# Set this ContextVar to a doc_id string in any async task to capture MongoDB
+# aggregate/find commands issued from that task (and its Motor executor threads)
+# into _query_capture_registry[doc_id].  Cleared automatically by the ASGI
+# middleware in mongo_mcp.py after each captured HTTP request.
+query_capture_cv: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "query_capture_doc_id", default=None
+)
+
+# Registry: doc_id → list of captured command dicts.  Written by the listener
+# (Motor thread); drained by mongo_mcp._logging_mcp_call_fn (asyncio task).
+_query_capture_registry: Dict[str, list] = {}
+
+_CAPTURE_COMMANDS = frozenset({"aggregate", "find"})
+
+
+class _QueryCaptureListener(monitoring.CommandListener):
+    """Appends every aggregate/find command to _query_capture_registry when a
+    capture doc_id is active in query_capture_cv for the current thread context.
+    Registered on every AsyncIOMotorClient created by MongoDBClient.
+    Set enabled=True (via set_query_capture_enabled) to activate; False is a no-op.
+    """
+
+    enabled: bool = False
+
+    def started(self, event: monitoring.CommandStartedEvent) -> None:  # type: ignore[override]
+        if not self.enabled:
+            return
+        doc_id = query_capture_cv.get()
+        if not doc_id:
+            return
+        if event.command_name not in _CAPTURE_COMMANDS:
+            return
+        capture_list = _query_capture_registry.get(doc_id)
+        if capture_list is None:
+            return
+        cmd = event.command
+        entry: Dict[str, Any] = {
+            "command": event.command_name,
+            "database": event.database_name,
+            "collection": str(cmd.get(event.command_name, "")),
+        }
+        if event.command_name == "aggregate":
+            entry["pipeline"] = list(cmd.get("pipeline", []))
+        else:
+            for field in ("filter", "projection", "sort", "limit"):
+                if field in cmd:
+                    entry[field] = cmd[field]
+        capture_list.append(entry)
+
+    def succeeded(self, event: monitoring.CommandSucceededEvent) -> None:  # type: ignore[override]
+        pass
+
+    def failed(self, event: monitoring.CommandFailedEvent) -> None:  # type: ignore[override]
+        pass
+
+
+_CAPTURE_LISTENER = _QueryCaptureListener()
+
+
+def set_query_capture_enabled(flag: bool) -> None:
+    """Toggle the CommandListener on/off without reconnecting the Motor client.
+
+    Call this after reading tool_config so the listener is active only when
+    query_logging: true is set in the MongoDB tool config.
+    """
+    _CAPTURE_LISTENER.enabled = bool(flag)
 logger = logging.getLogger(__name__)
 
 class MongoDBClient:
@@ -35,7 +107,7 @@ class MongoDBClient:
         # override the mongo url from our settings
         self.db_url =           config["url"]
         self._db_name =         config['database']
-        self._collection_name = config['collection']
+        self._collection_name = config.get('collection') or self._collection_name
 
     def _convert_oid_to_objectid(self, data: Dict) -> Dict:
         """Convert string OID fields to ObjectId objects in a dictionary"""
@@ -114,7 +186,7 @@ class MongoDBClient:
 
     async def ensure_connection(self):
         """Ensure MongoDB connection is established"""
-        print(f"Connecting to mongodb {self._db_name} {self._collection_name}, {self.db_url}")
+        logger.debug(f"connecting to mongodb {self._db_name} {self._collection_name}")
         ping_result = {}
         if not self._connection_initialized:
             ping_result = await self.connect_to_mongodb()
@@ -132,11 +204,11 @@ class MongoDBClient:
         """Initialize MongoDB connection using settings.py configuration"""
         ping_result = None
         try:
-            uri = self.get_mongo_uri()
-            self.client = AsyncIOMotorClient(uri)
-                        # Test the connection
+            self.client = AsyncIOMotorClient(self.get_mongo_uri(), event_listeners=[_CAPTURE_LISTENER])
+
+            # Test the connection
             ping_result = await self.client.admin.command('ping')
-            logger.info(f"Successfully connected to MongoDB database: {self._db_name}")
+            logger.debug(f"Successfully connected to MongoDB database: {self._db_name}")
 
             self._set_locals()
             self._connection_initialized = True

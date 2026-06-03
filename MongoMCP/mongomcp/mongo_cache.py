@@ -7,14 +7,28 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 from .mongodb_client import MongoDBClient
 
 class MongoSessionCache:
-    """MongoDB-backed cache scoped to a username and session ID."""
+    """MongoDB-backed cache scoped to a username and session ID.
+
+    Two storage modes controlled by ``per_document``:
+
+    * ``per_document=False`` (default) — **embedded mode**.  All entries for a
+      ``(username, session_id)`` pair live as subdocuments inside a single
+      MongoDB document.  Efficient for caches with a small number of entries
+      (e.g. tool discovery, which stores exactly one entry).
+
+    * ``per_document=True`` — **flat mode**.  Each cache entry is its own
+      document, keyed by ``(username, session_id, cache_key)``.  Required for
+      caches whose individual values can be large (e.g. tool responses from
+      vector search or aggregation) to avoid hitting the 16 MB document limit.
+    """
 
     def __init__(
         self,
         settings: Any,
         username: str,
         session_id: str,
-        cache_object_name: str = "tool_discovery"
+        cache_object_name: str = "tool_discovery",
+        per_document: bool = False,
     ):
         if not username:
             raise ValueError("username is required")
@@ -24,6 +38,7 @@ class MongoSessionCache:
         self.cache_object_name = cache_object_name
         self.username = username
         self.session_id = session_id
+        self.per_document = per_document
         self._collection_name = "mcp_cache"
         local_settings = settings
         local_settings.mcp_config_col = "mcp_cache" # Override collection name for cache
@@ -33,9 +48,21 @@ class MongoSessionCache:
 
     @property
     def _session_filter(self) -> Dict[str, str]:
+        """Filter for embedded-mode docs: scoped to (username, session_id, cache_object_name, doc_type)."""
+        return {
+            "doc_type": "embedded",
+            "username": self.username,
+            "session_id": self.session_id,
+            "cache_object_name": self.cache_object_name,
+        }
+
+    def _entry_filter(self, key: str) -> Dict[str, str]:
+        """Filter for a single entry in flat (per_document) mode."""
         return {
             "username": self.username,
-            "session_id": self.session_id
+            "session_id": self.session_id,
+            "cache_object_name": self.cache_object_name,
+            "cache_key": key,
         }
 
     @staticmethod
@@ -59,21 +86,54 @@ class MongoSessionCache:
         collection = self._mongo_client.get_collection(self._collection_name)
 
         if not self._indexes_initialized:
-            # One cache document per (username, session_id, cache_object_name).
-            await collection.create_index(
-                [("username", 1), ("session_id", 1)],
-                unique=True,
-                name="mcp_cache_username_session_id_unique",
-            )
+            if self.per_document:
+                # One document per cache entry — index on the entry key.
+                await collection.create_index(
+                    [("username", 1), ("session_id", 1),
+                     ("cache_object_name", 1), ("cache_key", 1)],
+                    unique=True,
+                    name="mcp_cache_entry_unique",
+                )
+                # TTL index — MongoDB auto-deletes expired entries.
+                await collection.create_index(
+                    [("expires_at", 1)],
+                    expireAfterSeconds=0,
+                    name="mcp_cache_entry_ttl",
+                )
+            else:
+                # One document per (username, session_id, cache_object_name) — all entries embedded.
+                # Partial filter uses doc_type="embedded" discriminator (Atlas supports $eq in partial filters).
+                await collection.create_index(
+                    [("username", 1), ("session_id", 1), ("cache_object_name", 1)],
+                    unique=True,
+                    partialFilterExpression={"doc_type": {"$eq": "embedded"}},
+                    name="mcp_cache_embedded_unique",
+                )
             self._indexes_initialized = True
 
         return collection
 
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
     async def get(self, key: str) -> Any:
         collection = await self._get_collection()
+
+        if self.per_document:
+            doc = await collection.find_one(self._entry_filter(key), {"value": 1, "timestamp": 1, "ttl": 1, "_id": 0})
+            if not doc:
+                return None
+            timestamp = float(doc.get("timestamp", 0))
+            ttl = int(doc.get("ttl", self._default_ttl))
+            if time.time() - timestamp >= ttl:
+                await self.delete(key)
+                return None
+            return doc.get("value")
+
+        # Embedded mode
         slot = self._cache_slot(key)
         projection = {f"{self.cache_object_name}.cache.{slot}": 1, "_id": 0}
-
         doc = await collection.find_one(self._session_filter, projection)
         if not doc:
             return None
@@ -90,7 +150,6 @@ class MongoSessionCache:
 
         timestamp = float(entry.get("timestamp", 0))
         ttl = int(entry.get("ttl", self._default_ttl))
-
         if time.time() - timestamp >= ttl:
             await self.delete(key)
             return None
@@ -99,22 +158,45 @@ class MongoSessionCache:
 
     async def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
         collection = await self._get_collection()
-        slot = self._cache_slot(key)
         cache_ttl = ttl if ttl is not None else self._default_ttl
+        now = time.time()
 
-        entry = {
-            "key": key,
-            "value": value,
-            "timestamp": time.time(),
-            "ttl": cache_ttl,
-        }
+        if self.per_document:
+            expires_at = datetime.fromtimestamp(now + cache_ttl, tz=timezone.utc)
+            await collection.update_one(
+                self._entry_filter(key),
+                {
+                    "$set": {
+                        "value": value,
+                        "timestamp": now,
+                        "ttl": cache_ttl,
+                        "expires_at": expires_at,
+                        "updated_at": datetime.now(timezone.utc),
+                    },
+                    "$setOnInsert": {
+                        "doc_type": "entry",
+                        "username": self.username,
+                        "session_id": self.session_id,
+                        "cache_object_name": self.cache_object_name,
+                        "cache_key": key,
+                        "created_at": datetime.now(timezone.utc),
+                    },
+                },
+                upsert=True,
+            )
+            return
 
+        # Embedded mode
+        slot = self._cache_slot(key)
+        entry = {"key": key, "value": value, "timestamp": now, "ttl": cache_ttl}
         await collection.update_one(
             self._session_filter,
             {
                 "$setOnInsert": {
+                    "doc_type": "embedded",
                     "username": self.username,
                     "session_id": self.session_id,
+                    "cache_object_name": self.cache_object_name,
                     "started_at": datetime.now(timezone.utc),
                 },
                 "$set": {
@@ -127,8 +209,12 @@ class MongoSessionCache:
 
     async def delete(self, key: str) -> None:
         collection = await self._get_collection()
-        slot = self._cache_slot(key)
 
+        if self.per_document:
+            await collection.delete_one(self._entry_filter(key))
+            return
+
+        slot = self._cache_slot(key)
         await collection.update_one(
             self._session_filter,
             {
@@ -140,12 +226,23 @@ class MongoSessionCache:
 
     async def clear(self) -> None:
         collection = await self._get_collection()
+
+        if self.per_document:
+            await collection.delete_many({
+                "username": self.username,
+                "session_id": self.session_id,
+                "cache_object_name": self.cache_object_name,
+            })
+            return
+
         await collection.update_one(
             self._session_filter,
             {
                 "$setOnInsert": {
+                    "doc_type": "embedded",
                     "username": self.username,
                     "session_id": self.session_id,
+                    "cache_object_name": self.cache_object_name,
                 },
                 "$set": {
                     f"{self.cache_object_name}.cache": {},
@@ -158,6 +255,16 @@ class MongoSessionCache:
     async def remove_pattern(self, pattern: str) -> int:
         """Remove cached entries where the original key contains pattern."""
         collection = await self._get_collection()
+
+        if self.per_document:
+            result = await collection.delete_many({
+                "username": self.username,
+                "session_id": self.session_id,
+                "cache_object_name": self.cache_object_name,
+                "cache_key": {"$regex": pattern},
+            })
+            return result.deleted_count
+
         doc = await collection.find_one(self._session_filter, {f"{self.cache_object_name}.cache": 1, "_id": 0})
         if not doc:
             return 0

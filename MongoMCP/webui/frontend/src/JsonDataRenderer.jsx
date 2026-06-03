@@ -1,4 +1,5 @@
 import MapResultsDisplay, { canDisplayAsMap } from './MapResultsDisplay.jsx';
+import MemoryGraphDisplay from './MemoryGraphDisplay.jsx';
 
 /**
  * Dispatches a jsondata object to the correct React component
@@ -10,6 +11,8 @@ export default function JsonDataRenderer({ jsonData }) {
   switch (jsonData.jsonDataType) {
     case 'geospatial_scatter':
       return <MapResultsDisplay mapData={jsonData} />;
+    case 'memory_graph':
+      return <MemoryGraphDisplay graphData={jsonData} />;
     default: {
       // Try to auto-detect a mappable format before falling back to raw JSON.
       if (canDisplayAsMap(jsonData)) {

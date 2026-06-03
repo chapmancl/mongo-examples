@@ -26,6 +26,29 @@ class MongoDBQueryServer(MongoDBClient):
         self.description = "MongoDB Vector Search MCP Server"
         self.available_collections = [self._collection_name]
 
+    @staticmethod
+    def _build_projection(projection: Optional[Dict], vector_path: Optional[str]) -> Optional[Dict]:
+        """Return a projection dict that always excludes the vector_path field.
+
+        - Inclusion projection (values=1): already excludes vector_path implicitly — returned as-is.
+        - Exclusion projection (values=0) or None: the vector_path field is added with value 0.
+        - Empty dict: treated as exclusion — returns {vector_path: 0}.
+        """
+        if not vector_path:
+            return projection
+
+        if projection:
+            # Detect inclusion projection: at least one value is 1 (and it's not _id)
+            non_id = {k: v for k, v in projection.items() if k != '_id'}
+            if non_id and all(v == 1 for v in non_id.values()):
+                # Inclusion — embedding not in list so already excluded
+                return projection
+            # Exclusion or mixed — add the vector path
+            return {**projection, vector_path: 0}
+
+        # No projection: exclude only the vector field
+        return {vector_path: 0}
+
     def set_config(self, config: Dict) -> None:
         """Set the tool configuration from a dictionary. this overrides the default settings"""
         if config is None:
@@ -164,7 +187,7 @@ class MongoDBQueryServer(MongoDBClient):
             info["mongodb"]["collections"][coll].update(coll_info)
         return info
 
-    async def vector_search(self, collection: str, vector_qry: str, filters: list = None, limit: int = 10, num_candidates: int = 100) -> List[Dict[str, Any]]:
+    async def vector_search(self, collection: str, vector_qry: str, filters: list = None, limit: int = 10, num_candidates: int = 100, index: str = None, vector_path: str = None, projection: dict = None) -> List[Dict[str, Any]]:
         """
         Perform vector search using MongoDB's $search aggregation pipeline
 
@@ -176,14 +199,33 @@ class MongoDBQueryServer(MongoDBClient):
         Returns:
             List of search results with similarity scores
         """
+
         try:
+            if not collection or not str(collection).strip():
+                raise ValueError("mongodb_query_provider.vector_search:collection must be a non-empty string")
+
             await self.ensure_connection()
+            # Prefer caller-supplied values (injected by middleware from the named tool
+            # config entry). Fall back to legacy tool_config['tools']['vector_search']
+            # for backward-compatible single-tool deployments.
+            _vs_cfg = self.tool_config.get('tools', {}).get('vector_search', {})
+            _index = index or _vs_cfg.get('index')
+            _vector_path = vector_path or _vs_cfg.get('vector_path')
+            _projection = self._build_projection(
+                projection or _vs_cfg.get('projection'),
+                _vector_path,
+            )
+            if not _index or not _vector_path:
+                raise ValueError(
+                    f"vector_search: missing 'index' or 'vector_path' for collection '{collection}'. "
+                    "Ensure the tool config entry has 'index' and 'vector_path' fields."
+                )
             # MongoDB Atlas Vector Search aggregation pipeline
             pipeline = [
                 {
                     "$vectorSearch": {
-                        "index": self.tool_config['tools']['vector_search']['index'],
-                        "path": "embedding",
+                        "index": _index,
+                        "path": _vector_path,
                         "queryVector": vector_qry,
                         "numCandidates": num_candidates,
                         "limit": limit
@@ -195,14 +237,14 @@ class MongoDBQueryServer(MongoDBClient):
                     }
                 },
                 {
-                    "$project": self.tool_config['tools']['vector_search']['projection']
-                },
-                {
                     "$sort": {
                         "score": -1
                     }
                 }
             ]
+
+            if _projection:
+                pipeline.insert(2, {"$project": _projection})
 
             # Apply filters to narrow the search if provided
             if filters:
@@ -220,11 +262,12 @@ class MongoDBQueryServer(MongoDBClient):
 
                 # Inject the filter into the pipeline
                 pipeline[0]["$vectorSearch"]["filter"] = match_filter
-            print(f"Constructed vector search pipeline: {pipeline}")
             results = []
+            logger.debug(f"Vector search pipeline: {pipeline}")
+            logger.debug(f"Vector search collection: {collection}")
             async for doc in self.get_collection(collection).aggregate(pipeline):
                 results.append(doc)
-            #logger.info(f"Vector search returned {len(results)} results")
+            logger.debug(f"Vector search returned {len(results)} results")
             return results
 
         except PyMongoError as e:
@@ -388,6 +431,154 @@ class MongoDBQueryServer(MongoDBClient):
 
         except PyMongoError as e:
             logger.error(f"Text search failed: {e}")
+            raise
+
+    async def hybrid_search(
+        self,
+        collection: str,
+        vector_qry: List[float],
+        query_text: str,
+        limit: int = 10,
+        num_candidates: int = 100,
+        filters: list = None,
+        vector_index: str = None,
+        text_index: str = None,
+        vector_path: str = None,
+        text_fields: Optional[List[str]] = None,
+        vector_weight: float = 0.6,
+        text_weight: float = 0.4,
+        projection: dict = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Perform hybrid search combining vector similarity and full-text BM25
+        using MongoDB Atlas $rankFusion in a single aggregation pipeline.
+
+        Returns results with score_details showing the fusion score, so the
+        audience can see both retrieval signals contributing to ranking.
+        """
+        try:
+            if not collection or not str(collection).strip():
+                raise ValueError("hybrid_search: collection must be a non-empty string")
+
+            await self.ensure_connection()
+
+            _hs_cfg = self.tool_config.get("tools", {}).get("hybrid_search", {})
+            _vector_index = vector_index or _hs_cfg.get("vector_index")
+            _text_index   = text_index   or _hs_cfg.get("text_index")
+            _vector_path  = vector_path  or _hs_cfg.get("vector_path")
+            _text_fields  = text_fields  or _hs_cfg.get("text_fields") or ["description"]
+            _projection   = self._build_projection(
+                projection or _hs_cfg.get("projection"),
+                _vector_path,
+            )
+
+            if not _vector_index or not _vector_path:
+                raise ValueError(
+                    f"hybrid_search: missing 'vector_index' or 'vector_path' for collection '{collection}'. "
+                    "Ensure the tool config has these fields."
+                )
+            if not _text_index:
+                raise ValueError(
+                    f"hybrid_search: missing 'text_index' for collection '{collection}'. "
+                    "An Atlas Search full-text index is required for $rankFusion."
+                )
+
+            # $rankFusion does not accept pre-filters at the pipeline level.
+            # Filters are applied as a $match stage AFTER fusion scoring,
+            # which correctly narrows the fused result set.
+            post_filter: Optional[Dict] = None
+            if filters:
+                if len(filters) > 1:
+                    post_filter = {"$and": [{k: v} for k, v in filters]}
+                else:
+                    post_filter = {filters[0][0]: filters[0][1]}
+
+            vector_pipeline: List[Dict] = [
+                {
+                    "$vectorSearch": {
+                        "index": _vector_index,
+                        "path": _vector_path,
+                        "queryVector": vector_qry,
+                        "numCandidates": num_candidates,
+                        "limit": limit * 5,
+                    }
+                }
+            ]
+
+            text_pipeline: List[Dict] = [
+                {
+                    "$search": {
+                        "index": _text_index,
+                        "text": {"query": query_text, "path": _text_fields},
+                    }
+                },
+                {"$limit": limit * 5},
+            ]
+
+            pipeline: List[Dict] = [
+                {
+                    "$rankFusion": {
+                        "input": {
+                            "pipelines": {
+                                "vector": vector_pipeline,
+                                "text": text_pipeline,
+                            }
+                        },
+                        "combination": {
+                            "weights": {
+                                "vector": vector_weight,
+                                "text": text_weight,
+                            }
+                        },
+                        "scoreDetails": True,
+                    }
+                },
+                {
+                    "$addFields": {
+                        "score_details": {
+                            "fusion_score": {"$meta": "searchScore"},
+                            "vector_weight": vector_weight,
+                            "text_weight": text_weight,
+                        }
+                    }
+                },
+            ]
+
+            if post_filter:
+                pipeline.append({"$match": post_filter})
+
+            pipeline.append({"$limit": limit})
+
+            # Apply inclusion projections only — exclusion projections conflict with
+            # score_details (inclusion field) in the same $project stage.
+            # Instead, strip excluded fields (like the embedding) from results in Python.
+            inclusion_proj: Optional[Dict] = None
+            fields_to_strip: List[str] = []
+
+            if _projection:
+                non_id = {k: v for k, v in _projection.items() if k != "_id"}
+                if non_id and all(v == 1 for v in non_id.values()):
+                    # Inclusion projection — safe to use as $project, add score_details.
+                    inclusion_proj = {**_projection, "score_details": 1}
+                else:
+                    # Exclusion projection — collect fields to strip in Python instead.
+                    fields_to_strip = [k for k, v in _projection.items() if v == 0]
+            # Always strip the embedding vector field from results.
+            if _vector_path and _vector_path not in fields_to_strip:
+                fields_to_strip.append(_vector_path)
+
+            if inclusion_proj:
+                pipeline.append({"$project": inclusion_proj})
+
+            results: List[Dict] = []
+            async for doc in self.get_collection(collection).aggregate(pipeline):
+                for field in fields_to_strip:
+                    doc.pop(field, None)
+                results.append(doc)
+            return results
+
+        except PyMongoError as e:
+            logger.error(f"Hybrid search failed: {e}")
             raise
 
     async def agg_pipeline(self, collection: str, pipeline: List[Dict]) -> List[Dict[str, Any]]:

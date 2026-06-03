@@ -163,6 +163,31 @@ class BedrockClient:
 
         return cache_points_added
 
+    @staticmethod
+    def _deserialize_stringified_arrays(tool_input: dict) -> dict:
+        """Normalize tool inputs where Claude has stringified array/object values.
+
+        Claude occasionally encodes array or object parameters as JSON strings
+        (e.g. entities='["X","Y"]' instead of entities=["X","Y"]). This pass
+        detects any string value that parses as a JSON array or object and
+        replaces it with the parsed value, so downstream handlers always receive
+        the correct native type.
+        """
+        if not isinstance(tool_input, dict):
+            return tool_input
+        result = {}
+        for k, v in tool_input.items():
+            if isinstance(v, str) and len(v) >= 2 and v[0] in ('[', '{'):
+                try:
+                    parsed = json.loads(v)
+                    if isinstance(parsed, (list, dict)):
+                        result[k] = parsed
+                        continue
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            result[k] = v
+        return result
+
     def _try_parse_json(self, json_string):
         """ try to parse a string to json, return json obj or nothing """
         # I hate using try/catch as logic, but here we are. is there a better way?
@@ -288,8 +313,32 @@ class BedrockClient:
             return return_obj
 
         # subtract 1 or else we would end on a tool response
+        _iter_warning_injected = False
         for iteration in range(self.max_iterations):
             try:
+                # Warn the LLM when only 5 iterations remain so it can wrap up.
+                iterations_remaining = self.max_iterations - iteration
+                if iterations_remaining <= 5 and not _iter_warning_injected:
+                    _iter_warning_injected = True
+                    self._emit_progress(
+                        self.message_handler,
+                        f"Iteration limit warning: {iterations_remaining} of {self.max_iterations} iterations remaining",
+                        status="Iteration Warning",
+                    )
+                    messages.append({
+                        "role": "user",
+                        "content": [{
+                            "text": (
+                                f"\n\n[Iteration Warning] You have {iterations_remaining} of "
+                                f"{self.max_iterations} LLM iterations remaining in this request. "
+                                "You must finish within these iterations. "
+                                "Stop calling tools, save any important state to memory now using "
+                                "the memory intake tool, and return a concise summary response to "
+                                "the user so they can continue in a new request if needed."
+                            )
+                        }]
+                    })
+
                 self._emit_progress(self.message_handler, f"Invoking Bedrock (iteration {iteration + 1})", status="LLM Thinking...")
 
                 # Invoke Bedrock using the Converse API
@@ -309,7 +358,7 @@ class BedrockClient:
                 elapsed_ms = (time.monotonic() - t0) * 1000
                 self._emit_progress(
                     self.message_handler,
-                    f"Bedrock completed in {elapsed_ms:.0f}ms",
+                    f"Bedrock completed in {elapsed_ms / 1000:.3f}s",
                     status="LLM Response Received",
                 )
 
@@ -320,7 +369,7 @@ class BedrockClient:
                 else:
                     for k,v in itt_used.items(): usage[k] += v
                 return_obj["usage"] = usage
-                return_obj["usage_last"] = itt_used
+                #return_obj["usage_last"] = itt_used
 
                 # Get the assistant's response
                 assistant_message = response['output']['message']
@@ -330,8 +379,8 @@ class BedrockClient:
                             if self.show_response_progress:
                                 self._emit_progress(
                                     self.message_handler,
-                                    f"LLM: {content['text'][0:150]}...",
-                                    status="LLM Response"
+                                    content['text'],
+                                    status="LLM Reasoning"
                                 )
                             break
 
@@ -356,24 +405,87 @@ class BedrockClient:
 
                     # If there are tool calls, execute them
                     if tool_calls:
-                        tool_results = []
                         max_context_tokens = int(getattr(self.settings, "LLM_MAX_CONTEXT_TOKENS", 200000))
                         current_usage_tokens = int((itt_used or {}).get("inputTokens", 0)) + int((itt_used or {}).get("outputTokens", 0))
                         estimated_context_tokens = self._estimate_total_context_tokens(messages)
                         context_baseline_tokens = max(current_usage_tokens, estimated_context_tokens)
-                        projected_additional_tokens = 0
 
+                        # Announce all pending calls upfront, then dispatch concurrently.
                         for tool_req in tool_calls:
+                            self._emit_progress(self.message_handler, f"Calling tool: {tool_req['name']}", status="Tool Execution")
+
+                        async def _exec_one(tool_req):
                             tool_name = tool_req['name']
-                            tool_input = tool_req['input']
                             tool_use_id = tool_req['toolUseId']
-                            self._emit_progress(self.message_handler, f"Calling tool: {tool_name}", status="Tool Execution")
-                            # Execute the MCP tool call (with caching)
                             try:
-                                tool_result = await self._call_mcp_tool(tool_name, tool_input)
-                                result_len = len(str(tool_result))
-                                self._emit_progress(self.message_handler, f"Tool {tool_name} returned {result_len} chars", status="Tool Complete")
-                                tool_result_text = str(tool_result)
+                                tool_input = self._deserialize_stringified_arrays(tool_req['input'])
+                                result = await self._call_mcp_tool(tool_name, tool_input)
+                                result_text = str(result)
+                                self._emit_progress(
+                                    self.message_handler,
+                                    f"Tool {tool_name} returned {len(result_text)} chars",
+                                    status="Tool Complete",
+                                )
+                                return tool_use_id, tool_name, result_text, None
+                            except Exception as e:
+                                logger.error(f"Error executing MCP tool {tool_name}: {e}")
+                                return tool_use_id, tool_name, None, e
+
+                        raw_results = await asyncio.gather(
+                            *[_exec_one(tr) for tr in tool_calls],
+                            return_exceptions=True,
+                        )
+
+                        # Post-pass: token-overflow check (pure arithmetic, no I/O).
+                        # return_exceptions=True means BaseException instances can appear
+                        # as result values — handle them so no toolUseId is ever missing.
+                        tool_results = []
+                        projected_additional_tokens = 0
+                        for i, item in enumerate(raw_results):
+                            if isinstance(item, BaseException):
+                                tool_use_id = tool_calls[i]['toolUseId']
+                                tool_name = tool_calls[i]['name']
+                                logger.error(f"Unhandled error in parallel tool {tool_name}: {item}")
+                                tool_results.append({
+                                    "toolResult": {
+                                        "toolUseId": tool_use_id,
+                                        "content": [{"text": f"Error: {str(item)}"}],
+                                        "status": "error",
+                                    }
+                                })
+                                continue
+                            tool_use_id, tool_name, tool_result_text, exc = item
+                            if exc is not None:
+                                tool_results.append({
+                                    "toolResult": {
+                                        "toolUseId": tool_use_id,
+                                        "content": [{"text": f"Error: {str(exc)}"}],
+                                        "status": "error",
+                                    }
+                                })
+                                continue
+                            candidate_block = {
+                                "toolResult": {
+                                    "toolUseId": tool_use_id,
+                                    "content": [{"text": tool_result_text}],
+                                }
+                            }
+                            added_tokens = 6 + self._estimate_content_tokens(candidate_block)
+                            projected_total_tokens = context_baseline_tokens + projected_additional_tokens + added_tokens
+
+                            # If full tool output would overflow model context, send a compact notice instead.
+                            if projected_total_tokens > max_context_tokens:
+                                self._emit_progress(
+                                    self.message_handler,
+                                    f"Tool result for {tool_name} would overflow context; sending overflow notice only",
+                                    status="Tool Overflow",
+                                )
+                                tool_result_text = self._tool_overflow_notice(
+                                    tool_name=tool_name,
+                                    estimated_added_tokens=added_tokens,
+                                    current_tokens=context_baseline_tokens + projected_additional_tokens,
+                                    max_tokens=max_context_tokens,
+                                )
                                 candidate_block = {
                                     "toolResult": {
                                         "toolUseId": tool_use_id,
@@ -381,48 +493,14 @@ class BedrockClient:
                                     }
                                 }
                                 added_tokens = 6 + self._estimate_content_tokens(candidate_block)
-                                projected_total_tokens = context_baseline_tokens + projected_additional_tokens + added_tokens
 
-                                # If full tool output would overflow model context, do not append it.
-                                # Return only a compact success+overflow notice to keep the turn valid.
-                                if projected_total_tokens > max_context_tokens:
-                                    self._emit_progress(
-                                        self.message_handler,
-                                        f"Tool result for {tool_name} would overflow context; sending overflow notice only",
-                                        status="Tool Overflow",
-                                    )
-                                    tool_result_text = self._tool_overflow_notice(
-                                        tool_name=tool_name,
-                                        estimated_added_tokens=added_tokens,
-                                        current_tokens=context_baseline_tokens + projected_additional_tokens,
-                                        max_tokens=max_context_tokens,
-                                    )
-                                    candidate_block = {
-                                        "toolResult": {
-                                            "toolUseId": tool_use_id,
-                                            "content": [{"text": tool_result_text}],
-                                        }
-                                    }
-                                    added_tokens = 6 + self._estimate_content_tokens(candidate_block)
-
-                                projected_additional_tokens += added_tokens
-                                tool_results.append({
-                                    "toolResult": {
-                                        "toolUseId": tool_use_id,
-                                        "content": [{"text": tool_result_text}]
-                                    }
-                                })
-                            except Exception as e:
-                                # don't fail here, the LLM can usually find a work around
-                                # just log it and keep going
-                                logger.error(f"Error executing MCP tool {tool_name}: {e}")
-                                tool_results.append({
-                                    "toolResult": {
-                                        "toolUseId": tool_use_id,
-                                        "content": [{"text": f"Error: {str(e)}"}],
-                                        "status": "error"
-                                    }
-                                })
+                            projected_additional_tokens += added_tokens
+                            tool_results.append({
+                                "toolResult": {
+                                    "toolUseId": tool_use_id,
+                                    "content": [{"text": tool_result_text}],
+                                }
+                            })
 
 
                         # Add tool results to the conversation
@@ -472,14 +550,21 @@ class BedrockClient:
                 error_msg = error.response['Error']['Message']
                 logger.error(f"Bedrock error: {error_code} - {error_msg}")
                 if error_code == 'ValidationException':
-                    # Corrupt conversation state: toolUse without a matching toolResult.
-                    # Signal callers to clear history so the next request starts fresh.
+                    # Try to repair: extract missing toolUseIds from the error message,
+                    # inject synthetic toolResult blocks, and retry this iteration.
                     if 'toolResult' in error_msg or 'toolUse' in error_msg:
-                        logger.error("Conversation history is corrupt (missing toolResult). Clearing history.")
-                        messages.clear()
-                        return_obj["history"] = []
+                        repaired = self._repair_missing_tool_results(messages, error_msg)
+                        if repaired:
+                            logger.warning(
+                                "Repaired %d missing toolResult block(s); retrying iteration %d",
+                                repaired, iteration + 1,
+                            )
+                            continue  # retry this iteration with patched history
+                        # Could not repair — fall back to clearing history.
+                        logger.error("Conversation history is corrupt and could not be repaired. Clearing history.")
+                        return_obj["history"] = messages
                         return_obj["clear_history"] = True
-                        return_obj["error"] = "Conversation history was corrupt and has been cleared. Please try again."
+                        return_obj["error"] = "Conversation history was corrupt and has been cleared. Please retry your question."
                     else:
                         return_obj["error"] = f"Input validation failed {error_msg}"
                 elif error_code in ['ExpiredTokenException', 'ExpiredToken']:
@@ -496,6 +581,100 @@ class BedrockClient:
         logger.error(f"invoke_bedrock_with_tools reached maximum iterations: {self.max_iterations}")
         return_obj["error"] = f"Maximum iterations ({self.max_iterations}) reached without completion"
         return return_obj
+
+
+    def _repair_missing_tool_results(self, messages: list, error_msg: str) -> int:
+        """
+        Inject synthetic toolResult blocks for any toolUseIds that Bedrock reports
+        as missing a result.
+
+        Strategy:
+        1. Parse the orphaned IDs from Bedrock's error message.
+        2. Skip IDs that already have a toolResult anywhere in history.
+        3. For each orphaned ID, find the assistant message that contains the
+           matching toolUse block and insert a user/toolResult message immediately
+           after it (positional repair). This handles the messages.0 case where
+           appending at the end would not satisfy Bedrock's ordering requirement.
+        4. Fall back to appending at the end for any IDs whose assistant message
+           cannot be located.
+
+        Returns the number of synthetic blocks injected (0 = could not repair).
+        """
+        import re as _re
+
+        named_ids = set(_re.findall(r'tooluse_[A-Za-z0-9]+', error_msg))
+        if not named_ids:
+            return 0
+
+        # Collect IDs that already have a toolResult in history.
+        answered: set = set()
+        for msg in messages:
+            if msg.get('role') != 'user':
+                continue
+            for block in msg.get('content', []):
+                if 'toolResult' in block:
+                    answered.add(block['toolResult'].get('toolUseId', ''))
+
+        target_ids = named_ids - answered
+        if not target_ids:
+            return 0
+
+        def _synthetic(tid: str) -> dict:
+            return {
+                "toolResult": {
+                    "toolUseId": tid,
+                    "content": [{"text": "Tool execution failed or result was lost. Please proceed without this result."}],
+                    "status": "error",
+                }
+            }
+
+        injected = 0
+        remaining = set(target_ids)
+
+        # Pass 1: positional repair — insert result message right after the
+        # assistant message that owns the orphaned toolUse block.
+        i = 0
+        while i < len(messages) and remaining:
+            msg = messages[i]
+            if msg.get('role') == 'assistant':
+                owned = [
+                    b['toolUse']['toolUseId']
+                    for b in msg.get('content', [])
+                    if isinstance(b, dict) and 'toolUse' in b
+                    and b['toolUse'].get('toolUseId') in remaining
+                ]
+                if owned:
+                    synthetic_blocks = [_synthetic(tid) for tid in owned]
+                    # Insert a user/toolResult turn right after this assistant message.
+                    next_msg = messages[i + 1] if i + 1 < len(messages) else None
+                    if (next_msg and next_msg.get('role') == 'user'
+                            and isinstance(next_msg.get('content'), list)
+                            and all(isinstance(b, dict) and 'toolResult' in b
+                                    for b in next_msg['content'])):
+                        # Merge into the existing tool-result turn.
+                        next_msg['content'].extend(synthetic_blocks)
+                    else:
+                        messages.insert(i + 1, {'role': 'user', 'content': synthetic_blocks})
+                        i += 1  # skip past the just-inserted message
+                    for tid in owned:
+                        remaining.discard(tid)
+                    injected += len(owned)
+            i += 1
+
+        # Pass 2: fallback — append remaining IDs that had no matching assistant message.
+        if remaining:
+            synthetic_blocks = [_synthetic(tid) for tid in remaining]
+            if messages and messages[-1].get('role') == 'user':
+                existing = messages[-1].get('content', [])
+                if all(isinstance(b, dict) and 'toolResult' in b for b in existing):
+                    messages[-1]['content'].extend(synthetic_blocks)
+                else:
+                    messages.append({'role': 'user', 'content': synthetic_blocks})
+            else:
+                messages.append({'role': 'user', 'content': synthetic_blocks})
+            injected += len(synthetic_blocks)
+
+        return injected
 
 
     async def _call_mcp_tool(
@@ -538,7 +717,7 @@ class BedrockClient:
         if model_id.startswith("voyage-"):
             return await self.generate_voyage_embeddings(text, model_id=model_id)
 
-        logger.info(f"Generating embedding using Bedrock model {model_id} for input text of length {len(text)}")
+        logger.debug(f"Generating embedding using Bedrock model {model_id} for input text of length {len(text)}")
         # amazon.* — use Bedrock
         body = json.dumps({"inputText": text})
         loop = asyncio.get_event_loop()
@@ -561,7 +740,7 @@ class BedrockClient:
 
     async def generate_voyage_embeddings(self, text: str, model_id: Optional[str] = None, is_query: bool = True) -> list:
         """Generates an embedding for the input text using the Voyage AI API.
-
+        https://www.mongodb.com/docs/api/doc/atlas-embedding-and-reranking-api/operation/operation-createembedding
         Args:
             text: Input text to embed.
             model_id: Voyage model to use. Defaults to self.settings.EMBEDDING_MODEL_ID.
@@ -576,35 +755,165 @@ class BedrockClient:
         if model_id is None:
             model_id = self.settings.EMBEDDING_MODEL_ID
         if not model_id.startswith("voyage-"):
-            logger.info(f"Model ID {model_id} for generate_voyage_embeddings is not a Voyage model. Defaulting to {model_id}.")
+            logger.debug(f"Model ID {model_id} for generate_voyage_embeddings is not a Voyage model. Defaulting to {model_id}.")
             model_id = "voyage-4"  # default to voyage-4 if not specified or incorrectly specified
 
 
         # voyage distinguishes between query and document embeddings for better performance
         input_type = "query" if is_query else "document"
 
-        logger.info(f"Using {input_type} embedding model: {model_id}")
+        logger.debug(f"Using {input_type} embedding model: {model_id}")
+
+        max_retries = 6
+        base_delay = 2.0  # seconds
+        for attempt in range(max_retries):
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    "https://ai.mongodb.com/v1/embeddings",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "input": text,
+                        "model": model_id,
+                        "input_type": input_type
+                    },
+                )
+                if response.status_code == 429:
+                    retry_after = float(response.headers.get("Retry-After", base_delay * (2 ** attempt)))
+                    logger.warning(f"Voyage 429 rate limit — waiting {retry_after:.1f}s (attempt {attempt+1}/{max_retries})")
+                    await asyncio.sleep(retry_after)
+                    continue
+                response.raise_for_status()
+                data = response.json()
+                return {
+                    "embedding_model": model_id,
+                    "vector": data["data"][0]["embedding"]
+                }
+        raise RuntimeError(f"generate_voyage_embeddings: exceeded {max_retries} retries due to rate limiting")
+
+    async def generate_voyage_embeddings_batch(
+        self,
+        texts: List[str],
+        model_id: Optional[str] = None,
+        is_query: bool = False,
+        batch_size: int = 1000,
+    ) -> List[dict]:
+        """Generate embeddings for a list of texts using the Voyage AI API.
+
+        Splits *texts* into batches of up to *batch_size* (max 1000 per API limit),
+        sends each batch in a single request, and returns results in input order.
+        https://www.mongodb.com/docs/api/doc/atlas-embedding-and-reranking-api/operation/operation-createembedding
+        Args:
+            texts: List of strings to embed.
+            model_id: Voyage model to use. Defaults to EMBEDDING_MODEL_ID (document)
+                      or QUERY_EMBEDDING_MODEL_ID (query).
+            is_query: When True, uses the query embedding model and input_type="query".
+            batch_size: Items per API call. Capped at 1000 (API maximum).
+
+        Returns:
+            List of dicts, one per input text, each with keys:
+                - "embedding_model": str
+                - "vector": list[float]
+        """
+        api_key = self.settings.mongo_voyage_apikey()
+        if is_query:
+            model_id = model_id or self.settings.QUERY_EMBEDDING_MODEL_ID
+        if model_id is None:
+            model_id = self.settings.EMBEDDING_MODEL_ID
+        if not model_id.startswith("voyage-"):
+            model_id = "voyage-4"
+
+        input_type = "query" if is_query else "document"
+        batch_size = min(batch_size, 1000)
+
+        results: List[dict] = [None] * len(texts)
+
+        max_retries = 6
+        base_delay = 2.0
+
+        for batch_start in range(0, len(texts), batch_size):
+            batch = texts[batch_start: batch_start + batch_size]
+            for attempt in range(max_retries):
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(
+                        "https://ai.mongodb.com/v1/embeddings",
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "input": batch,
+                            "model": model_id,
+                            "input_type": input_type,
+                        },
+                    )
+                    if response.status_code == 429:
+                        retry_after = float(
+                            response.headers.get("Retry-After", base_delay * (2 ** attempt))
+                        )
+                        logger.warning(
+                            f"Voyage batch 429 rate limit — waiting {retry_after:.1f}s "
+                            f"(batch {batch_start}, attempt {attempt + 1}/{max_retries})"
+                        )
+                        await asyncio.sleep(retry_after)
+                        continue
+                    response.raise_for_status()
+                    data = response.json()
+                    # data["data"] is ordered by "index" within the batch
+                    for item in data["data"]:
+                        global_idx = batch_start + item["index"]
+                        results[global_idx] = {
+                            "embedding_model": model_id,
+                            "vector": item["embedding"],
+                        }
+                    break  # success — move to next batch
+            else:
+                raise RuntimeError(
+                    f"generate_voyage_embeddings_batch: exceeded {max_retries} retries "
+                    f"on batch starting at index {batch_start}"
+                )
+
+        return results
+
+    async def rerank(
+        self,
+        query: str,
+        documents: List[str],
+        top_k: Optional[int] = 10,
+        truncation: bool = True,
+    ) -> List[dict]:
+        """Rerank *documents* against *query* using the Voyage AI reranker API.
+
+        Returns a list of dicts sorted by descending relevance_score:
+            [{"index": <original_index>, "document": <str>, "relevance_score": <float>}, ...]
+
+        Raises httpx.HTTPStatusError on API errors.
+        """
+        model = "rerank-2.5" # TODO move this to settings
+        api_key = self.settings.mongo_voyage_apikey()
+        payload: Dict[str, Any] = {
+            "query": query,
+            "documents": documents,
+            "model": model,
+            "truncation": truncation,
+            "top_k": top_k
+        }
 
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                "https://ai.mongodb.com/v1/embeddings",
+                "https://ai.mongodb.com/v1/rerank",
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 },
-                json={
-                    "input": text,
-                    "model": model_id,
-                    "input_type": input_type
-                },
+                json=payload,
             )
             response.raise_for_status()
             data = response.json()
-        return {
-            "embedding_model": model_id,
-            "vector": data["data"][0]["embedding"]
-        }
 
+        return data.get("data", [])
 
 
 class ServerBedrockClient(BedrockClient):

@@ -10,5 +10,9 @@ services:
     environment:
       - MONGO_MCP_ROOT=${MONGO_MCP_ROOT}
       - MONGO_CREDS=${MONGO_CREDS}
+      - CACHE_NAMESPACE=local
+      #- COGNITO_CLIENT_ID=${COGNITO_CLIENT_ID}
+      #- COGNITO_USERNAME=${COGNITO_USERNAME}
+      #- COGNITO_PASSWORD=${COGNITO_PASSWORD}
     volumes:
       - ~/.aws:/root/.aws

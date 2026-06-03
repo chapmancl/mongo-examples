@@ -94,6 +94,7 @@ class WebUiBedrockClient(BedrockClient):
     ) -> Dict[str, Any]:
         history = response_obj.get("history", fallback_history or [])
         usage = response_obj.get("usage")
+        stats = response_obj.get("stats")
 
         if response_obj.get("error"):
             return {
@@ -101,6 +102,7 @@ class WebUiBedrockClient(BedrockClient):
                 "jsondata": None,
                 "history": history,
                 "usage": usage,
+                "stats": stats,
             }
 
         # Get the raw assistant text from history
@@ -123,6 +125,7 @@ class WebUiBedrockClient(BedrockClient):
                 "jsondata": None,
                 "history": history,
                 "usage": usage,
+                "stats": stats,
             }
 
         # Only extract JSON via [JSON_DATA_START]...[JSON_DATA_END] tags.
@@ -133,4 +136,5 @@ class WebUiBedrockClient(BedrockClient):
             "jsondata": tag_json,  # None if no tags found
             "history": history,
             "usage": usage,
+            "stats": stats,
         }

@@ -1,4 +1,6 @@
 import os
+import logging
+import time
 from flask import Flask, send_from_directory, request, jsonify, abort, Response
 from flask_cors import CORS
 import requests
@@ -9,6 +11,11 @@ import traceback
 from typing import Optional, List, Any
 import threading
 import json
+import queue
+
+logging.basicConfig(level=logging.INFO)
+logging.getLogger("mcp.client.streamable_http").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 mimetypes.add_type('application/javascript', '.js')
 
@@ -21,20 +28,40 @@ _site_warmup_done = False
 
 
 def _warmup_tool_discovery_once() -> None:
-    """Run MCP tool discovery once on first site load."""
+    """Run MCP tool discovery once on first site load, retrying until tools are found."""
     global _site_warmup_done
     if _site_warmup_done:
         return
     with _site_warmup_lock:
         if _site_warmup_done:
             return
-        try:
-            # Triggers processor initialization path and exposes discovered config.
-            processor.get_mcp_config()
-            _site_warmup_done = True
-        except Exception:
-            # Do not block initial page load on warmup failure.
-            traceback.print_exc()
+        max_attempts = 5
+        for attempt in range(1, max_attempts + 1):
+            try:
+                # If tools already loaded (e.g. __init__ succeeded), we're done.
+                if processor.mcp_tools_config:
+                    _site_warmup_done = True
+                    return
+                # Tools not yet discovered — trigger discovery now.
+                processor._discover_tools()
+                if processor.mcp_tools_config:
+                    _site_warmup_done = True
+                    return
+            except Exception:
+                traceback.print_exc()
+
+            if attempt >= max_attempts:
+                # Do not block initial page load on warmup failure.
+                app.logger.warning("Warmup tool discovery failed after %s attempts.", max_attempts)
+                return
+            wait_seconds = attempt * 5
+            app.logger.warning(
+                "Warmup tool discovery returned no tools (attempt %s/%s). Retrying in %ss.",
+                attempt,
+                max_attempts,
+                wait_seconds,
+            )
+            time.sleep(wait_seconds)
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -60,13 +87,9 @@ def api_query():
         if not q:
             raise ValueError("Empty input")
 
-        req = QueryRequest(input=q, history=payload.get("history", []), user_id=payload.get("user_id"), session_id=payload.get("session_id"))
-        if q.startswith("clear history"):
-            resp = processor.clear_history().json()
-            code = 205
-        else:
-            resp = processor.query_with_mcp_tools(req).json()
-            code = 200
+        req = QueryRequest(input=q, history=payload.get("history", []), user_id=payload.get("user_id"), username=payload.get("username"), session_id=payload.get("session_id"))
+        resp = processor.query_with_mcp_tools(req).json()
+        code = 200
 
     except Exception as e:
         traceback.print_exc()
@@ -87,27 +110,14 @@ def stream_query():
         return jsonify({'error': str(e)}), 400
 
 
-@app.route('/history/reset', methods=['POST'])
-def reset_history():
+@app.route('/reset', methods=['POST'])
+def full_reset():
+    """Full application reset: clear state, drop cached MCP clients, reload tool discovery."""
     try:
         if processor.init_error:
             raise ValueError(f"Processor initialization failed: {processor.init_error}")
-
-        resp = processor.clear_history().json()
+        resp = processor.reset().json()
         return jsonify(resp), 200
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify(QueryResponse(status="Error", error=str(e)).json()), 500
-
-
-@app.route('/history', methods=['GET'])
-def get_history():
-    """Return trimmed conversation history for the UI debug panel."""
-    try:
-        if processor.init_error:
-            raise ValueError(f"Processor initialization failed: {processor.init_error}")
-        resp = processor.get_history()
-        return jsonify(resp.json()), 200
     except Exception as e:
         traceback.print_exc()
         return jsonify(QueryResponse(status="Error", error=str(e)).json()), 500
@@ -122,7 +132,8 @@ def save_pattern():
         payload = request.get_json(force=True) or {}
         user_id = (payload.get("user_id") or "").strip()
         session_id = (payload.get("session_id") or "").strip()
-        resp = processor.save_pattern(user_id, session_id)
+        history = payload.get("history") or []
+        resp = processor.save_pattern(user_id, session_id, history)
         return jsonify(resp.json()), 200
     except Exception as e:
         traceback.print_exc()
@@ -139,9 +150,10 @@ def record_feedback():
         user_id = (payload.get("user_id") or "").strip()
         session_id = (payload.get("session_id") or "").strip()
         feedback = (payload.get("feedback") or "").strip()
+        history = payload.get("history") or []
         if not user_id or not session_id or feedback not in ("positive", "negative"):
             return jsonify({"error": "user_id, session_id, and feedback (positive|negative) required"}), 400
-        resp = processor.record_feedback(user_id, session_id, feedback)
+        resp = processor.record_feedback(user_id, session_id, feedback, history)
         return jsonify(resp.json()), 200
     except Exception as e:
         traceback.print_exc()
@@ -158,6 +170,31 @@ def generate(payload):
             yield QueryResponse(status="Error", error="Empty input").json() + '\n'
             return
 
+        local_queue = queue.Queue()
+
+        def emit_local(message, status="Processing"):
+            if isinstance(message, Exception):
+                resp = QueryResponse(status="Error", error=str(message), message=str(message))
+            else:
+                resp = QueryResponse(status=status, message=str(message))
+            local_queue.put(resp.json())
+
+        def read_local_stream(timeout=0.1):
+            while True:
+                try:
+                    yield local_queue.get(timeout=timeout)
+                except queue.Empty:
+                    break
+
+        def pop_local_messages() -> List[str]:
+            msgs = []
+            while True:
+                try:
+                    msgs.append(local_queue.get_nowait())
+                except queue.Empty:
+                    break
+            return msgs
+
         # Generic threaded executor - returns (result, exception)
         def execute_in_thread(func):
             """Execute a function in a background thread and stream messages."""
@@ -173,13 +210,24 @@ def generate(payload):
             thread = threading.Thread(target=wrapper, daemon=True)
             thread.start()
 
+            HEARTBEAT_INTERVAL = 5.0
+            last_heartbeat = time.monotonic()
+
             # Stream messages as they arrive from the handler
             while thread.is_alive():
-                for msg in processor.read_message_stream(timeout=0.1):
+                for msg in read_local_stream(timeout=0.1):
                     yield msg + '\n'
+                    last_heartbeat = time.monotonic()
+
+                if time.monotonic() - last_heartbeat >= HEARTBEAT_INTERVAL:
+                    # Drain queue first, then emit heartbeat
+                    for msg in pop_local_messages():
+                        yield msg + '\n'
+                    yield QueryResponse(status='LLM Thinking...', message='LLM is still thinking...').json() + '\n'
+                    last_heartbeat = time.monotonic()
 
             # Drain any remaining messages after thread completes
-            for msg in processor.pop_queued_messages():
+            for msg in pop_local_messages():
                 yield msg + '\n'
 
             # Yield the final result and exception as a tuple
@@ -188,20 +236,13 @@ def generate(payload):
         result = None
         exception = None
 
-        if q.startswith("clear history"):
-            for item in execute_in_thread(processor.clear_history):
-                if isinstance(item, tuple):
-                    result, exception = item
-                else:
-                    yield item
-        else:
-            yield QueryResponse(status='querying', message='Querying Claude with MCP tools...').json() + '\n'
-            req = QueryRequest(input=q, history=payload.get("history", []), user_id=payload.get("user_id"), session_id=payload.get("session_id"))
-            for item in execute_in_thread(lambda: processor.query_with_mcp_tools(req)):
-                if isinstance(item, tuple):
-                    result, exception = item
-                else:
-                    yield item
+        yield QueryResponse(status='querying', message='Querying Claude with MCP tools...').json() + '\n'
+        req = QueryRequest(input=q, history=payload.get("history", []), user_id=payload.get("user_id"), username=payload.get("username"), session_id=payload.get("session_id"))
+        for item in execute_in_thread(lambda: processor.query_with_mcp_tools(req, emit=emit_local)):
+            if isinstance(item, tuple):
+                result, exception = item
+            else:
+                yield item
 
         # Yield final result
         if exception:

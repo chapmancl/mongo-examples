@@ -154,7 +154,7 @@ export default function MapResultsDisplay({ mapData }) {
 
       <MapContainer
         center={center}
-        zoom={7}
+        zoom={12}
         style={{ height: '500px', width: '100%', borderRadius: 8 }}
         scrollWheelZoom={true}
       >
