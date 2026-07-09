@@ -848,6 +848,104 @@ async def vectorize_text(body: Dict[str, Any],
         }
 
 
+@app.post("/llm_history/save")
+async def save_llm_history(
+    body: Dict[str, Any],
+    token: Annotated[str, Depends(get_token)]
+) -> Dict[str, Any]:
+    """
+    Save LLM conversation history to MongoDB llm_history collection.
+
+    Body parameters:
+        username (str): Username of the user
+        prompt (str): The prompt/question sent to the LLM
+        response (str): The LLM's response
+        tool_name (str, optional): Name of the tool/service (default: settings.TOOL_NAME)
+        prompt_name (str, optional): Name of the specific prompt (default: "user_query")
+        metadata (dict, optional): Additional metadata to store
+
+    Returns:
+        dict: {"status": "success", "id": "<document_id>"} or {"status": "error", "error": "<message>"}
+    """
+    try:
+        # Extract required fields
+        username = body.get("username")
+        prompt = body.get("prompt")
+        response = body.get("response")
+
+        if not username:
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "error": "username is required"}
+            )
+
+        if not prompt:
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "error": "prompt is required"}
+            )
+
+        if not response:
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "error": "response is required"}
+            )
+
+        # Extract optional fields
+        tool_name = body.get("tool_name", settings.TOOL_NAME)
+        prompt_name = body.get("prompt_name", "user_query")
+        metadata = body.get("metadata", {})
+
+        # Build conversation data
+        conversation_data = {
+            "username": username,
+            "prompt": prompt,
+            "response": response,
+            "metadata": metadata
+        }
+
+        # Use agent_id from token if available, otherwise use username
+        agent_id = token.get("agent_name", username)
+
+        # Save to MongoDB using middleware
+        doc_id = mongo_middleware.save_llm_conversation(
+            conversation_data=conversation_data,
+            agent_id=agent_id,
+            tool_name=tool_name,
+            prompt_name=prompt_name
+        )
+
+        if doc_id:
+            logger.info(f"LLM history saved for user: {username}, id: {doc_id}")
+            return {
+                "status": "success",
+                "id": doc_id,
+                "username": username,
+                "tool_name": tool_name,
+                "prompt_name": prompt_name
+            }
+        else:
+            logger.error("Failed to save LLM history to MongoDB")
+            return JSONResponse(
+                status_code=500,
+                content={"status": "error", "error": "Failed to save to database"}
+            )
+
+    except HTTPException as he:
+        logger.error(f"Authorization failed: {he.detail}")
+        return JSONResponse(
+            status_code=he.status_code,
+            content={"status": "error", "error": he.detail}
+        )
+    except Exception as e:
+        logger.error(f"Error saving LLM history: {e}")
+        logger.debug("".join(traceback.format_exception(None, e, e.__traceback__)))
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "error": str(e)}
+        )
+
+
 # now that all the other API endpoints are established, lets add our mcp routes to the fastapi app.
 app.mount(f"/{settings.TOOL_NAME}", mcp_app)
 app.mount("/memory", memory_app)

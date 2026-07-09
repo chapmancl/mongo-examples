@@ -49,6 +49,9 @@ class AWSSettings:
         # URL of the MCP server (mongo_mcp.py or deployed service)
         self.mongo_mcp_root = os.getenv('MONGO_MCP_ROOT', 'http://localhost:8000')
 
+        # Save LLM conversation history to MongoDB llm_history collection
+        self.SAVE_LLM_HISTORY = os.getenv('SAVE_LLM_HISTORY', 'true').lower() in ['1', 'true', 'yes', 'on']
+
         # System prompt injected into every Bedrock conversation
         self.BEDROCK_SYSTEM_PROMPT_TEXTS = [
             "***IMPORTANT: DO NOT recall sessions by username until you have confirmed the username with the user. DO NOT ASSUME you know the Username. Default username is demo-user",

@@ -6,7 +6,7 @@ MongoDB MCP (Model Context Protocol) server package providing:
 - Authentication and middleware
 - AWS Bedrock LLM integration
 - Configuration management
-
+- silly modification
 Main Classes:
 - MongoDBQueryServer: Core Mongo Query functionality
 - MongoMCPMiddleware: Request middleware, config interactions to/from MongoDB, MCP tool management

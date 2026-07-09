@@ -8,7 +8,7 @@ from mcp_processor import APIQueryProcessor, QueryResponse, QueryRequest
 from mongomcp import __version__ as MCP_VERSION
 import mimetypes
 import traceback
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Dict
 import threading
 import json
 import queue
@@ -16,6 +16,12 @@ import queue
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("mcp.client.streamable_http").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
+
+# Import settings to check SAVE_LLM_HISTORY flag
+try:
+    from aws_settings import settings
+except ImportError:
+    from local_settings import settings
 
 mimetypes.add_type('application/javascript', '.js')
 
@@ -63,6 +69,63 @@ def _warmup_tool_discovery_once() -> None:
             )
             time.sleep(wait_seconds)
 
+
+def save_llm_history_to_mongo(username: str, prompt: str, response: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+    """
+    Save LLM conversation history to MongoDB via the MCP server API.
+
+    Args:
+        username: Username of the user
+        prompt: The prompt/question sent to the LLM
+        response: The LLM's response
+        metadata: Optional metadata to include
+    """
+    if not settings.SAVE_LLM_HISTORY:
+        return
+
+    if not username or not prompt or not response:
+        app.logger.debug("Skipping LLM history save - missing required fields")
+        return
+
+    try:
+        # Build the payload
+        payload = {
+            "username": username,
+            "prompt": prompt,
+            "response": response
+        }
+
+        if metadata:
+            payload["metadata"] = metadata
+
+        # Get the auth token
+        auth_token = settings.get_auth_token()
+
+        # Call the MCP server's /llm_history/save endpoint
+        url = f"{settings.mongo_mcp_root}/llm_history/save"
+
+        response = requests.post(
+            url,
+            json=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {auth_token}"
+            },
+            timeout=5
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+            app.logger.info(f"LLM history saved for user {username}, id: {data.get('id')}")
+        else:
+            app.logger.warning(f"Failed to save LLM history: HTTP {response.status_code}")
+
+    except requests.exceptions.Timeout:
+        app.logger.warning("Timeout saving LLM history to MongoDB")
+    except Exception as e:
+        app.logger.error(f"Error saving LLM history: {e}")
+
+
 @app.route('/health', methods=['GET'])
 def health():
     """Health check endpoint."""
@@ -75,8 +138,13 @@ def health():
 
 @app.route('/query', methods=['POST'])
 def api_query():
+    #add logging
     resp = '{"status": "error", "message": "Unknown error"}'  # Default error response
     code = 500
+    username = None
+    prompt = None
+    reasoning_steps = []  # Collect reasoning steps
+
     try:
         payload = request.get_json(force=True)
 
@@ -87,9 +155,40 @@ def api_query():
         if not q:
             raise ValueError("Empty input")
 
-        req = QueryRequest(input=q, history=payload.get("history", []), user_id=payload.get("user_id"), username=payload.get("username"), session_id=payload.get("session_id"))
-        resp = processor.query_with_mcp_tools(req).json()
+        username = payload.get("username", "anonymous")
+        prompt = q
+
+        # Create a custom emit handler to capture reasoning steps
+        def capture_emit(message, status="Processing"):
+            msg = str(message) if not isinstance(message, Exception) else str(message)
+            skip_patterns = ['LLM is still thinking', 'Querying Claude']
+            if not any(p in msg for p in skip_patterns):
+                reasoning_steps.append({"status": status, "message": msg})
+
+        req = QueryRequest(input=q, history=payload.get("history", []), user_id=payload.get("user_id"), username=username, session_id=payload.get("session_id"))
+        result = processor.query_with_mcp_tools(req, emit=capture_emit)
+        resp = result.json()
         code = 200
+
+        # Save LLM history if successful (in background thread to avoid blocking)
+        if code == 200 and result.content:
+            response_text = result.content.get("text", "")
+            if response_text:
+                threading.Thread(
+                    target=save_llm_history_to_mongo,
+                    args=(
+                        username,
+                        prompt,
+                        response_text,
+                        {
+                            "session_id": payload.get("session_id"),
+                            "user_id": payload.get("user_id"),
+                            "endpoint": "/query",
+                            "reasoning_steps": reasoning_steps  # Include processing log
+                        }
+                    ),
+                    daemon=True
+                ).start()
 
     except Exception as e:
         traceback.print_exc()
@@ -171,12 +270,18 @@ def generate(payload):
             return
 
         local_queue = queue.Queue()
+        reasoning_steps = []  # Collect reasoning steps for history
 
         def emit_local(message, status="Processing"):
             if isinstance(message, Exception):
                 resp = QueryResponse(status="Error", error=str(message), message=str(message))
             else:
                 resp = QueryResponse(status=status, message=str(message))
+                # Capture reasoning steps (skip heartbeat noise)
+                msg = str(message)
+                skip_patterns = ['LLM is still thinking', 'Querying Claude']
+                if not any(p in msg for p in skip_patterns):
+                    reasoning_steps.append({"status": status, "message": msg})
             local_queue.put(resp.json())
 
         def read_local_stream(timeout=0.1):
@@ -235,9 +340,10 @@ def generate(payload):
 
         result = None
         exception = None
+        username = payload.get("username", "anonymous")
 
         yield QueryResponse(status='querying', message='Querying Claude with MCP tools...').json() + '\n'
-        req = QueryRequest(input=q, history=payload.get("history", []), user_id=payload.get("user_id"), username=payload.get("username"), session_id=payload.get("session_id"))
+        req = QueryRequest(input=q, history=payload.get("history", []), user_id=payload.get("user_id"), username=username, session_id=payload.get("session_id"))
         for item in execute_in_thread(lambda: processor.query_with_mcp_tools(req, emit=emit_local)):
             if isinstance(item, tuple):
                 result, exception = item
@@ -249,6 +355,27 @@ def generate(payload):
             yield QueryResponse(error=str(exception)).json() + '\n'
         elif result:
             yield result.json() + '\n'
+
+            # Save LLM history if successful
+            if result and result.content:
+                response_text = result.content.get("text", "")
+                if response_text:
+                    # Save in a separate thread to not block the response
+                    threading.Thread(
+                        target=save_llm_history_to_mongo,
+                        args=(
+                            username,
+                            q,
+                            response_text,
+                            {
+                                "session_id": payload.get("session_id"),
+                                "user_id": payload.get("user_id"),
+                                "endpoint": "/query/stream",
+                                "reasoning_steps": reasoning_steps  # Include processing log
+                            }
+                        ),
+                        daemon=True
+                    ).start()
 
     except Exception as e:
         traceback.print_exc()
