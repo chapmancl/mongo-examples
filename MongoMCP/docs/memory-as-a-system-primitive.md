@@ -1,17 +1,65 @@
 # Memory As A System Primitive: Beyond Context Windows And Vector Stores
 
-AI memory is often framed as a retrieval problem: find a few relevant passages,
-place them in a prompt, and ask the model to continue. That framing is useful,
-but incomplete. Treating memory as content that an agent retrieves and pastes
-into a context window is a category error. Memory should be a system primitive:
-a typed, addressable, governed substrate that the runtime can query
-deterministically and compose behavior on top of.
+Most treatments of AI memory make a category error: they treat memory as
+content, text retrieved and pasted into a prompt. Even sophisticated systems
+where a model reads and writes file-like memory retain this framing. The more
+useful frame is that memory is a system primitive: a typed, addressable,
+governed substrate that the runtime queries deterministically, and on which
+higher-order behavior is composed rather than prompted.
 
-This is not an argument against context windows or vector stores. Context is
-fast and local. Vector search is an excellent navigation mechanism. Neither is
-enough to carry durable, shared, inspectable behavior across a population of
-stateless agents. The missing layer is memory that has types, visibility rules,
-relationships, lifecycle, and executable contracts.
+Context windows are registers: fast, local, and wiped on reset. Vector stores
+are raw memory: powerful, but unsafe to program against directly. The layer
+that matters sits above both: typed records with encapsulated state, scopes as
+access modifiers, strategies as virtual methods with genuine dispatch, and
+AI-authored functions as compiled, versioned, permissioned methods.
+
+The system described here delivers that substrate through the [Model Context
+Protocol](https://modelcontextprotocol.io). MCP is an ecosystem-level bet that
+the boundary between probabilistic models and deterministic systems should use
+typed, versioned tool contracts. The same discipline belongs one layer down, at
+the memory boundary. An agent does not own the store; it mounts memory as a tool
+surface with contracts.
+
+Two interdependent moves follow:
+
+1. Determinism can be reintroduced into a probabilistic system by letting an AI
+   create fixed retrieval procedures once instead of improvising them every
+   turn.
+2. Those procedures, together with the records they act on, form a
+   virtualization hierarchy: inheritance and dispatch over raw memory, directly
+   analogous to object-oriented programming.
+
+Deterministic functions are safe because memory is typed and scoped. Memory is
+programmable at scale because functions virtualize it. Neither works alone.
+
+## One Book Of Business, Many Views
+
+Put three people in one insurance carrier: a field agent, an underwriter, and a
+risk analyst, each with an AI assistant. They work from the same claims, policy,
+and territory data but ask different questions. Scopes keep private context
+private; shared scope becomes the commons where discoveries accumulate.
+
+First, an analyst works out the quirks of a legacy claims estate: pagination,
+cryptic loss-cause codes, and fields whose names conceal their actual meaning.
+That discovery becomes `claims.find_similar(description, region, date_range)`,
+a shared method with a typed signature, stable return contract, and hidden
+implementation. The knowledge of how to interrogate a domain is no longer
+re-derived each session.
+
+Next, a field agent untangles how claims, policies, and territories relate
+through composite keys and zone codes. Those relationships become linked
+records in the substrate. When the underwriter needs claims by territory, its
+assistant dispatches through the shared strategy instead of rediscovering both
+the query mechanics and relationships. If it finds a mapping defect, the
+correction enters a new draft version, is validated and published, and later
+calls resolve to the fix through most-recent dispatch.
+
+Finally, the analyst asks for front-end impact claims with airbag deployment,
+mapped across coastal territories. The assistant composes a hybrid narrative
+search, a deterministic join through the stored territory relationship, and a
+map-ready projection that renders directly to the screen. The relevance score
+from the fuzzy first step travels with the result to control marker intensity;
+the map data never needs to pass through the model context.
 
 ## The Determinism Problem
 
@@ -26,6 +74,12 @@ procedure. After that, execution is mechanical. The fuzzy work is quarantined
 to the first hop, where it belongs and where it can receive the best retrieval
 machinery: semantic and lexical rank fusion, optionally followed by reranking.
 The rest of the procedure is explicit.
+
+This quarantines nondeterminism to the first fuzzy hop. That hop deserves strong
+retrieval machinery: semantic lookup with a quality embedding model, fused with
+lexical search and optionally reranked. A deterministic pipeline processing the
+wrong records is still wrong. Everything downstream, including filtering,
+joining, ranking, and projection, is a fixed and inspectable pipeline.
 
 Three properties make that separation meaningful.
 
@@ -48,6 +102,12 @@ system navigates to evidence; authoritative data is fetched, checked, and cited
 at the source. The model holds a pointer and a procedure, not an ever-growing
 copy of the world.
 
+Execution being mechanical has another consequence: a pipeline's output
+contract includes its destination. The model is a possible consumer, not the
+mandatory one. A typed result can flow straight to a screen, file, or another
+system, sparing the context window. Cost then scales with the decision rather
+than data volume: the model orchestrates intent and steps out of the data path.
+
 ## Change Must Be Deterministic Too
 
 One deterministic execution is not enough if the procedure can be changed
@@ -64,6 +124,12 @@ The versioning rule is simple: search across all versions, but deliver only the
 latest applicable version. Older language can remain valuable for semantic
 discovery, while the runtime has a single authoritative behavior to execute.
 Recency is a dispatch rule, not merely another ranking feature.
+
+Human feedback grounds the lifecycle. Every successful retrieval, miss,
+correction, validation, and promotion passes through use. Trust is not granted
+once at authoring time; determinism and trust converge across repeated feedback
+cycles, with permissioned lifecycle transitions as the point where a person
+keeps a hand on the lever.
 
 ## OOP Over The Memory Layer
 
@@ -83,12 +149,29 @@ provides encapsulation, inheritance, and dispatch.
 | Compiled method | A named query function with typed inputs and a stable result contract. |
 | Vtable swap | Publishing a newer strategy or function version. |
 
-This mapping is load-bearing rather than decorative. Records are safe to use as
-programming objects because scopes and encapsulation constrain what they expose.
-The memory layer is programmable at scale because strategies and query functions
-virtualize the raw store. The agent can reason in terms of intent, invoke a
-named method, and inherit a well-defined fallback instead of recreating
-mechanism in every prompt.
+This mapping is load-bearing rather than decorative. A document is the base
+class: it carries AI-readable content and structured payload alongside the
+framework's deterministic fields for search, retrieval, scope, and scoring. The
+split between searchable embedded projection and never-embedded structured state
+is encapsulation: query the interface, act on the state.
+
+Scopes become runtime-enforced access modifiers. Shared, agent-local, user-wide,
+and session-local visibility is analogous to public, protected, and private
+access. Access control stops being prompt discipline and becomes a property
+outside the AI's influence.
+
+Strategies are virtual methods. They encode how to act, dispatch by name or
+semantic match, and inherit or override general playbooks. Fallbacks are not
+hard-coded escape hatches; they are authored abstractions in the same framework.
+The playbook for “I do not have a playbook” is itself a record and strategy.
+Semantic dispatch is the quarantined fuzzy hop; everything after selection is
+deterministic. Versioning supplies the vtable swap: publication silently
+redirects callers while older versions remain searchable.
+
+Authored strategies can also be compiled methods bound to a domain, with typed
+signatures, stable return contracts, and institutional knowledge hidden behind
+the implementation. Loading a domain is loading a class's method table; the
+agent calls `domain.method(args)` without reconstructing the pipeline beneath it.
 
 There are therefore two retrieval regimes. General memories, such as facts,
 preferences, and episodic notes, use graded relevance: temporal decay,
@@ -137,32 +220,32 @@ shared behavior. Consistency follows without sticky sessions or local caches
 acting as a source of truth. Determinism and virtualization make this
 reconstitution trustworthy.
 
-## Related Ideas
+## Situating This
 
-MemGPT introduced a useful operating-system analogy by virtualizing capacity:
-moving information among memory tiers to simulate a larger context. This
-approach virtualizes behavior: dispatch, inheritance, and versioned procedures
-over a durable substrate. The two ideas are complementary.
+[MemGPT](https://arxiv.org/abs/2310.08560) made an operating-system analogy
+through memory tiers, paging, and interrupts, but it virtualizes capacity:
+moving information across fast and slow memory to simulate a larger context.
+This approach virtualizes behavior: dispatch, inheritance, and versioned methods
+over the store. They are complementary layers of the same stack.
+[Graphiti](https://arxiv.org/abs/2501.13956) builds temporally aware knowledge
+graphs that preserve historical relationships. Its bi-temporal model resembles
+append-only version chains applied to facts rather than procedures. The
+[sleep-time compute](https://arxiv.org/abs/2504.13171) line of work promotes
+episodic records toward semantic ones through background consolidation; it is a
+useful but ungoverned ancestor of a permissioned lifecycle state machine.
 
-Temporal knowledge-graph systems such as Graphiti similarly recognize that
-facts change over time. Append-only version chains apply that discipline to
-procedures as well as facts. Sleep-time or background consolidation can promote
-episodic learning into durable knowledge, but governed lifecycles add the
-permission model required before a discovery becomes shared behavior.
+## Conclusion
 
-MCP extends the same principle across an ecosystem. A memory server is mounted
-as a typed tool surface with contracts; the agent does not need to own the
-database to use a consistent memory model.
+Object-oriented programming organized abstraction, encapsulation, scope, and
+polymorphism over raw memory. It let applications call behavior by name, let
+data carry guarantees, reach only permitted state, and resolve a call to the
+right implementation at runtime. Memory needs all four before an agent can
+program and execute against it.
 
-## Closing
-
-Context windows are registers: fast, local, and wiped on reset. Vector stores
-are raw addressable memory: powerful, but unsafe to program against directly.
-The layer that matters sits above both: typed records with encapsulated state,
-scopes as access modifiers, strategies as virtual methods, and AI-authored
-query functions as versioned, permissioned methods.
-
-The goal is not to make every action deterministic. It is to confine ambiguity
-to the first fuzzy hop, make repeated work inspectable and governed, and compose
-results rather than repeatedly prompting for them. Memory is not the thing an
-agent retrieves. It is the thing the system builds on.
+Strategies are named methods. Versioning is polymorphic dispatch that redirects
+callers to the newest implementation while older versions remain searchable.
+The enforced boundary between fuzzy and deterministic work keeps the result
+inspectable: one nondeterministic hop, then fixed and typed behavior. These are
+not a feature list. A method is safe to expose because the memory beneath it is
+typed and scoped; memory is programmable because methods dispatch over it.
+Remove any layer and the rest collapse.

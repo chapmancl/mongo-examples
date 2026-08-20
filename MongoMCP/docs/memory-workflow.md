@@ -65,8 +65,8 @@ flowchart LR
     tool -->|recall or strategy_recall| lookup[Build visibility and retrieval filters]
     lookup --> search[Vector search or direct entity lookup]
     search --> rank[Rank and resolve results]
-    rank --> graph[Optionally traverse related_docs]
-    graph --> result
+    rank --> traversal[Optionally traverse related_docs]
+    traversal --> result
 
     tool -->|reflect| maintain[Summarize, link, or update entities]
     maintain --> persist
