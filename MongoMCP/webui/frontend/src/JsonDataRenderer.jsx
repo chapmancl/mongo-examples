@@ -13,6 +13,23 @@ export default function JsonDataRenderer({ jsonData }) {
       return <MapResultsDisplay mapData={jsonData} />;
     case 'memory_graph':
       return <MemoryGraphDisplay graphData={jsonData} />;
+    case 'multi':
+      // Multiple bypassed tool results in one turn — render each independently
+      // (map/graph/table) via the same dispatch. Kept separate, not merged.
+      return (
+        <>
+          {(jsonData.items || []).map((it, i) => (
+            <div key={i} style={{ marginBottom: 16 }}>
+              {it.tool && (
+                <div style={{ fontSize: 12, color: '#00684A', fontWeight: 600, marginBottom: 4 }}>
+                  {it.domain ? `${it.domain}: ` : ''}{it.tool}
+                </div>
+              )}
+              <JsonDataRenderer jsonData={it.data} />
+            </div>
+          ))}
+        </>
+      );
     default: {
       // Try to auto-detect a mappable format before falling back to raw JSON.
       if (canDisplayAsMap(jsonData)) {

@@ -3,9 +3,11 @@ import logging
 import time
 from flask import Flask, send_from_directory, request, jsonify, abort, Response
 from flask_cors import CORS
+from werkzeug.middleware.proxy_fix import ProxyFix
 import requests
 from mcp_processor import APIQueryProcessor, QueryResponse, QueryRequest
 from mongomcp import __version__ as MCP_VERSION
+from auth import init_auth, apply_identity, current_identity
 import mimetypes
 import traceback
 from typing import Optional, List, Any
@@ -20,7 +22,20 @@ logging.getLogger("urllib3").setLevel(logging.WARNING)
 mimetypes.add_type('application/javascript', '.js')
 
 app = Flask(__name__, static_folder=os.path.join(os.path.dirname(__file__), 'frontend', 'dist'))
+# Honor X-Forwarded-For/Proto/Host from the fronting proxy/ALB so request.remote_addr
+# reflects the real client IP rather than the proxy/container address.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 CORS(app)
+# Install the pluggable auth guard. No-op unless AUTH_MODE (or AUTH_PROVIDER) is set.
+init_auth(app)
+
+# Optional, untracked local shim (see webui/redirect_shim.py) — absent in the
+# public repo, so this is a no-op unless the file has been created locally.
+try:
+    from redirect_shim import install_redirect_shim
+    install_redirect_shim(app)
+except ImportError:
+    pass
 
 processor = APIQueryProcessor()
 _site_warmup_lock = threading.Lock()
@@ -73,12 +88,29 @@ def health():
     }), 200
 
 
+@app.route('/me', methods=['GET'])
+def whoami():
+    """Report the verified identity (if any) so the frontend can lock the
+    username field when running behind an auth provider."""
+    identity = current_identity()
+    if identity is None:
+        return jsonify({"authenticated": False}), 200
+    return jsonify({
+        "authenticated": True,
+        "user_id": identity.sub,
+        "username": identity.email or identity.sub,
+        "email": identity.email,
+        "groups": identity.groups,
+    }), 200
+
+
 @app.route('/query', methods=['POST'])
 def api_query():
     resp = '{"status": "error", "message": "Unknown error"}'  # Default error response
     code = 500
     try:
         payload = request.get_json(force=True)
+        apply_identity(payload)
 
         if processor.init_error:
             raise ValueError(f"Processor initialization failed: {processor.init_error}")
@@ -87,7 +119,7 @@ def api_query():
         if not q:
             raise ValueError("Empty input")
 
-        req = QueryRequest(input=q, history=payload.get("history", []), user_id=payload.get("user_id"), username=payload.get("username"), session_id=payload.get("session_id"))
+        req = QueryRequest(input=q, history=payload.get("history", []), user_id=payload.get("user_id"), username=payload.get("username"), session_id=payload.get("session_id"), function_stage=payload.get("function_stage"), ip=request.remote_addr, identity_verified=payload.get("identity_verified", False))
         resp = processor.query_with_mcp_tools(req).json()
         code = 200
 
@@ -104,6 +136,13 @@ def stream_query():
     # Read request payload here while request context is active
     try:
         payload = request.get_json(force=True)
+        # Capture the client IP while the request context is active; the generator
+        # runs outside it and cannot access `request`.
+        if isinstance(payload, dict):
+            payload['client_ip'] = request.remote_addr
+        # Bake the verified identity into the payload while the request context
+        # (and g.identity) is still available; generate() runs outside it.
+        apply_identity(payload)
         # Pass a copy of payload into generator to avoid accessing `request` inside it
         return Response(generate(payload), mimetype='application/x-ndjson')
     except Exception as e:
@@ -123,6 +162,25 @@ def full_reset():
         return jsonify(QueryResponse(status="Error", error=str(e)).json()), 500
 
 
+@app.route('/function_stage', methods=['POST'])
+def set_function_stage():
+    """Toggle which dynamic-function stage is surfaced to the model: 'dev' or 'prod'.
+
+    'dev' also surfaces in-development functions so they can be iterated before
+    publishing; 'prod' (default) shows only published functions.
+    """
+    try:
+        if processor.init_error:
+            raise ValueError(f"Processor initialization failed: {processor.init_error}")
+        payload = request.get_json(force=True) or {}
+        stage = (payload.get("stage") or "prod").strip()
+        resp = processor.set_function_stage(stage)
+        return jsonify(resp), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify(QueryResponse(status="Error", error=str(e)).json()), 500
+
+
 @app.route('/pattern/save', methods=['POST'])
 def save_pattern():
     """Save the current interaction as a reusable query pattern."""
@@ -130,10 +188,31 @@ def save_pattern():
         if processor.init_error:
             raise ValueError(f"Processor initialization failed: {processor.init_error}")
         payload = request.get_json(force=True) or {}
+        apply_identity(payload)
         user_id = (payload.get("user_id") or "").strip()
         session_id = (payload.get("session_id") or "").strip()
         history = payload.get("history") or []
         resp = processor.save_pattern(user_id, session_id, history)
+        return jsonify(resp.json()), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify(QueryResponse(status="Error", error=str(e)).json()), 500
+
+
+@app.route('/checkpoint/finalize', methods=['POST'])
+def finalize_checkpoint():
+    """Fold any remaining live turns into the session's conversation checkpoint
+    before the thread is abandoned (e.g. on 'clear chat'). Best-effort, fast."""
+    try:
+        if processor.init_error:
+            raise ValueError(f"Processor initialization failed: {processor.init_error}")
+        payload = request.get_json(force=True) or {}
+        apply_identity(payload)
+        user_id = (payload.get("user_id") or "").strip()
+        username = (payload.get("username") or "").strip()
+        session_id = (payload.get("session_id") or "").strip()
+        history = payload.get("history") or []
+        resp = processor.finalize_checkpoint(session_id, user_id, username, history)
         return jsonify(resp.json()), 200
     except Exception as e:
         traceback.print_exc()
@@ -147,6 +226,7 @@ def record_feedback():
         if processor.init_error:
             raise ValueError(f"Processor initialization failed: {processor.init_error}")
         payload = request.get_json(force=True)
+        apply_identity(payload)
         user_id = (payload.get("user_id") or "").strip()
         session_id = (payload.get("session_id") or "").strip()
         feedback = (payload.get("feedback") or "").strip()
@@ -237,7 +317,7 @@ def generate(payload):
         exception = None
 
         yield QueryResponse(status='querying', message='Querying Claude with MCP tools...').json() + '\n'
-        req = QueryRequest(input=q, history=payload.get("history", []), user_id=payload.get("user_id"), username=payload.get("username"), session_id=payload.get("session_id"))
+        req = QueryRequest(input=q, history=payload.get("history", []), user_id=payload.get("user_id"), username=payload.get("username"), session_id=payload.get("session_id"), function_stage=payload.get("function_stage"), ip=payload.get("client_ip"), identity_verified=payload.get("identity_verified", False))
         for item in execute_in_thread(lambda: processor.query_with_mcp_tools(req, emit=emit_local)):
             if isinstance(item, tuple):
                 result, exception = item

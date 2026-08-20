@@ -47,7 +47,15 @@ for the full design article.
 
 ## Required Local Settings
 
-Before running the local setup, update the hardcoded MongoDB credentials in `local_settings.py`:
+Before running the local setup, create ignored local configuration files from
+the tracked templates:
+
+```bash
+cp local_settings.example.py local_settings.py
+cp webui/local_settings.example.py webui/local_settings.py
+```
+
+Then update the MongoDB credentials in both local settings files:
 
 ```python
 self._credentials = {
@@ -57,10 +65,12 @@ self._credentials = {
 }
 ```
 
-This value must be set in both places:
+These values must be set in both places:
 
 - `MongoMCP/local_settings.py`
 - `MongoMCP/webui/local_settings.py`
+
+Both files are ignored by Git, so credentials and local tokens are not tracked.
 
 The `mongoUrl` value is used by `tools/mongosetup.py` to rewrite `module_info.url` in the seeded `mcp_tools` documents.
 

@@ -72,7 +72,7 @@ class AWSSettings:
                 username=_cognito_username,
                 password=_cognito_password,
             )
-            logger.info("Cognito auth configured for user %s", _cognito_username)
+            logger.info("Cognito authentication configured")
         else:
             self._cognito = None
             logger.warning("Cognito env vars not set — falling back to static AUTH_TOKEN")
