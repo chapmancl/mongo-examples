@@ -224,7 +224,7 @@ converge across many iterations of the loop, and the permissioned lifecycle
 transitions are exactly where the human hand rests on the lever.
 
 How this is realized. This is not only a design sketch. It is implemented in
-DynamicMCP and MongoMCP. Typed records live in two MongoDB collections,
+DynamicMCP. Typed records live in two MongoDB collections,
 `memory_episodic` and `memory_semantic`. Versioned strategies are stored as
 ordinary records in `memory_semantic`. Scopes are enforced by the runtime.
 Read-only query functions move through a prod, dev, disabled, delete
