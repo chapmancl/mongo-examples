@@ -394,7 +394,7 @@ Third, scope becomes the coordination boundary. Shared-scope records let peer
 subagents see each other's output. The parent aggregates by querying a
 session. It never holds N contexts open.
 
-The payoff is that cost decouples from data volume. That is the essay's core
+The payoff is that cost decouples from data volume. That is the article's core
 economic claim, and now it is measured under fan-out rather than asserted. In
 a validated run of 400 items across memory-backed subagents:
 
@@ -402,6 +402,11 @@ a validated run of 400 items across memory-backed subagents:
 - Per-iteration returns shrank from 434 tokens to roughly 45, about 89%. Subagents returned a handle and persisted the analysis instead of inlining it.
 - Durable state cost about 300 bytes per batch. That is roughly 300 KB for 1,000 batches. Carrying the equivalent raw data through context would cost tens of megabytes.
 - Resume from checkpoint completed in under a minute with no recomputation.
+
+The payoff is not limited to multi-agent runs. Even in single-agent lookup
+patterns, scalability tracks the decision rather than the data. Feedback loops
+combined with memory and caching reduce token consumption and drive efficiency
+while demand on the underlying data continues to grow.
 
 ![Repeated demand scaled without proportional token growth](token_efficiency_medium.png)
 
