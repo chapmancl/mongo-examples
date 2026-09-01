@@ -52,6 +52,7 @@ function parseHistoryToTurns(history) {
 
     if (!userText) { i++; continue }
 
+    const startIndex = i
     const toolCallsMap = {}
     let assistantText = ''
     i++
@@ -68,7 +69,9 @@ function parseHistoryToTurns(history) {
             assistantText = (assistantText ? assistantText + '\n' : '') + block.text
           } else if (block.type === 'toolUse' || 'toolUse' in block) {
             const tu = block.toolUse || block
-            toolCallsMap[tu.toolUseId || tu.id || String(Object.keys(toolCallsMap).length)] = {
+            const _tid = tu.toolUseId || tu.id || String(Object.keys(toolCallsMap).length)
+            toolCallsMap[_tid] = {
+              toolUseId: _tid,
               name: tu.name,
               input: tu.input,
               result: undefined,
@@ -108,6 +111,7 @@ function parseHistoryToTurns(history) {
     }
 
     turns.push({
+      startIndex,
       userText,
       assistantText: assistantText.trim() ? stripJsonDataBlock(assistantText.trim()) : null,
       toolCalls: Object.values(toolCallsMap),
@@ -120,7 +124,7 @@ function parseHistoryToTurns(history) {
 export default function App() {
   const [question, setQuestion] = useState('')
   const [history, setHistory] = useState(null)
-  const [turns, setTurns] = useState([])
+  const [transcript, setTranscript] = useState([])
   const [mapData, setMapData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -134,12 +138,26 @@ export default function App() {
     if (!id) { id = crypto.randomUUID(); localStorage.setItem('mcp_user_id', id) }
     return id
   })
-  const [sessionId, setSessionId] = useState(() => crypto.randomUUID())
+  const [sessionId, setSessionId] = useState(() => {
+    // Persist so a page refresh keeps the same conversation thread (the backend
+    // reloads the deterministic checkpoint by session_id). 'Clear chat' mints a new one.
+    let id = localStorage.getItem('mcp_session_id')
+    if (!id) { id = crypto.randomUUID(); localStorage.setItem('mcp_session_id', id) }
+    return id
+  })
   const [username, setUsername] = useState(() => getCookie('mcp_username') || 'demo-user')
   const [usernameDraft, setUsernameDraft] = useState(() => getCookie('mcp_username') || 'demo-user')
+  // When an auth provider is enabled the backend supplies a verified identity; the
+  // username field is then locked and must not be edited client-side.
+  const [authLocked, setAuthLocked] = useState(false)
   const [feedbackGiven, setFeedbackGiven] = useState(null)
   const [reasoningSteps, setReasoningSteps] = useState([])
   const [pendingQuestion, setPendingQuestion] = useState(null)
+  // Which dynamic-function stage the backend surfaces to the model. 'dev' also
+  // surfaces in-development fn_ functions so they can be tested before publishing.
+  // Persisted so a reload keeps the UI authoritative across gunicorn workers.
+  const [functionStage, setFunctionStage] = useState(() => localStorage.getItem('mcp_function_stage') || 'prod')
+  const [stageSwitching, setStageSwitching] = useState(false)
 
   const modelId = import.meta.env.VITE_LLM_MODEL_ID || ''
 
@@ -148,17 +166,22 @@ export default function App() {
   const liveLogRef = useRef(null)
   const chatBodyRef = useRef(null)
 
-  // allReasoningRef stores reasoning steps for ALL turns, keyed by turn index.
-  // This persists across history re-parses so previous turns keep their steps.
-  const allReasoningRef = useRef({})  // { [turnIndex]: [{status, message}] }
   const frozenReasoningRef = useRef([])  // steps for the current in-flight turn
-  const allMapDataRef = useRef({})       // { [turnIndex]: mapData }
+  const currentMapDataRef = useRef(null) // in-flight map data (avoids stale effect closure)
+  // Captured from the streamed payloads so the committed turn uses the authoritative
+  // final answer + history rather than depending on the (trimmed) round-trip.
+  const finalHistoryRef = useRef(null)
+  const finalAnswerTextRef = useRef('')
+  // Per-tool execution times (toolUseId -> ms) for the in-flight turn, delivered
+  // in the final content.tool_timings and joined into the committed turn's toolCalls.
+  const toolTimingsRef = useRef({})
+  const clearHistoryRef = useRef(false)
 
   useEffect(() => {
     if (chatBodyRef.current) {
       chatBodyRef.current.scrollTop = chatBodyRef.current.scrollHeight
     }
-  }, [turns, streamedOutput, loading])
+  }, [transcript, streamedOutput, loading])
 
   useEffect(() => {
     if (liveLogRef.current) {
@@ -166,36 +189,55 @@ export default function App() {
     }
   }, [streamedOutput])
 
+  // Resolve the verified identity BEFORE the auto-greeting so the greeting (and the
+  // username the LLM sees) uses the verified email rather than the default
+  // demo-user. Falls back to the self-declared username when not authenticated.
   useEffect(() => {
-    if (history) {
-      const parsed = parseHistoryToTurns(history)
-      const lastIdx = parsed.length - 1
-      if (parsed.length > 0) {
-        // Save reasoning for current in-flight turn
-        if (frozenReasoningRef.current.length > 0) {
-          allReasoningRef.current[lastIdx] = [...frozenReasoningRef.current]
+    if (autoGreetingFiredRef.current) return
+    autoGreetingFiredRef.current = true
+    setLoading(true) // show the warming-up spinner from first paint, before /me + greeting
+    let cancelled = false
+    fetch(`${API_URL}/me`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(me => {
+        let effectiveName = username
+        if (!cancelled && me && me.authenticated && me.username) {
+          setAuthLocked(true)
+          setUsername(me.username)
+          setUsernameDraft(me.username)
+          effectiveName = me.username
         }
-        // Save map data for current turn if present
-        if (mapData !== null) {
-          allMapDataRef.current[lastIdx] = mapData
-        }
-      }
-      // Re-attach all stored reasoning and map data to their respective turns.
-      parsed.forEach((turn, idx) => {
-        if (allReasoningRef.current[idx]) turn.reasoningSteps = allReasoningRef.current[idx]
-        if (allMapDataRef.current[idx]) turn.mapData = allMapDataRef.current[idx]
+        if (!cancelled) submitQuestion(SESSION_GREETING(effectiveName))
       })
-      setTurns(parsed)
-    }
-  }, [history])
-
-  useEffect(() => {
-    if (!autoGreetingFiredRef.current) {
-      autoGreetingFiredRef.current = true
-      submitQuestion(SESSION_GREETING(username))
-    }
+      .catch(() => {
+        if (!cancelled) submitQuestion(SESSION_GREETING(username))
+      })
+    return () => { cancelled = true }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Flush the session checkpoint on tab close / refresh so an odd (un-checkpointed
+  // by the 2-turn cadence) tail turn isn't lost. sendBeacon survives page unload.
+  useEffect(() => {
+    const flush = () => {
+      const sid = localStorage.getItem('mcp_session_id')
+      const hist = finalHistoryRef.current
+      if (!sid || !Array.isArray(hist) || hist.length === 0) return
+      const uid = localStorage.getItem('mcp_user_id') || ''
+      const uname = getCookie('mcp_username') || username
+      try {
+        navigator.sendBeacon(
+          `${API_URL}/checkpoint/finalize`,
+          new Blob(
+            [JSON.stringify({ user_id: uid, username: uname, session_id: sid, history: hist })],
+            { type: 'application/json' },
+          ),
+        )
+      } catch { /* best-effort */ }
+    }
+    window.addEventListener('pagehide', flush)
+    return () => window.removeEventListener('pagehide', flush)
+  }, [username])
 
   function parseMaybeJson(value) {
     if (typeof value !== 'string') return value
@@ -209,7 +251,7 @@ export default function App() {
     obj = parseMaybeJson(obj)
     if (!obj || typeof obj !== 'object') return
 
-    if (obj.history !== undefined && obj.history !== null) setHistory(obj.history)
+    if (obj.history !== undefined && obj.history !== null) { setHistory(obj.history); finalHistoryRef.current = obj.history }
     if (obj.status !== undefined) setStatus(obj.status)
 
     if (obj.message !== undefined) {
@@ -233,10 +275,16 @@ export default function App() {
     const content = parseMaybeJson(obj.content)
     if (content && typeof content === 'object') {
       const jd = content.jsondata ?? content.jsonData
-      if (jd && typeof jd === 'object') setMapData(jd)
+      if (jd && typeof jd === 'object') { currentMapDataRef.current = jd; setMapData(jd) }
+      // Authoritative final answer for the answer bubble (survives history trimming).
+      if (typeof content.text === 'string' && content.text.trim()) finalAnswerTextRef.current = content.text
+      if (content.tool_timings && typeof content.tool_timings === 'object') {
+        toolTimingsRef.current = { ...toolTimingsRef.current, ...content.tool_timings }
+      }
     }
 
     if (obj.clear_history) {
+      clearHistoryRef.current = true
       setQuestion(lastQuestionRef.current)
       setMapData(null)
       setStreamedOutput('')
@@ -274,6 +322,39 @@ export default function App() {
     } catch (e) { setError(String(e)) }
   }
 
+  // Append a completed turn to the persistent transcript. The transcript is
+  // append-only and independent of the server's history array, so the full
+  // conversation stays scrollable even though history is trimmed for RAM.
+  function commitTurn(userText) {
+    let toolCalls = []
+    let parsedAssistant = null
+    const hist = finalHistoryRef.current
+    if (Array.isArray(hist)) {
+      const parsed = parseHistoryToTurns(hist)
+      if (parsed.length > 0) {
+        const last = parsed[parsed.length - 1]
+        toolCalls = (last.toolCalls || []).map(tc => {
+          const ms = toolTimingsRef.current[tc.toolUseId]
+          return typeof ms === 'number' ? { ...tc, timeMs: ms } : tc
+        })
+        parsedAssistant = last.assistantText
+      }
+    }
+    // Prefer the authoritative final answer captured from content.text; fall back
+    // to whatever the parsed history yielded.
+    const finalText = finalAnswerTextRef.current && finalAnswerTextRef.current.trim()
+      ? stripJsonDataBlock(finalAnswerTextRef.current.trim())
+      : parsedAssistant
+    setTranscript(prev => [...prev, {
+      id: prev.length,
+      userText,
+      assistantText: finalText || null,
+      toolCalls,
+      reasoningSteps: [...frozenReasoningRef.current],
+      mapData: currentMapDataRef.current,
+    }])
+  }
+
   async function submitQuestion(overrideInput, historyOverride, sessionOverride) {
     const inputToSend = overrideInput !== undefined ? String(overrideInput) : question
     const historyToSend = historyOverride !== undefined ? historyOverride : history
@@ -289,6 +370,11 @@ export default function App() {
     setFeedbackGiven(null)
     setReasoningSteps([])
     frozenReasoningRef.current = []
+    currentMapDataRef.current = null
+    finalHistoryRef.current = null
+    finalAnswerTextRef.current = ''
+    toolTimingsRef.current = {}
+    clearHistoryRef.current = false
     setMapData(null)
     if (!inputToSend.startsWith('Hi, my username is')) {
       setPendingQuestion(inputToSend)
@@ -298,7 +384,7 @@ export default function App() {
       const res = await fetch(`${API_URL}/query/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input: inputToSend, history: historyToSend, user_id: userId, username, session_id: sessionToSend }),
+        body: JSON.stringify({ input: inputToSend, history: historyToSend, user_id: userId, username, session_id: sessionToSend, function_stage: functionStage }),
       })
 
       if (!res.ok && res.status !== 404) {
@@ -332,11 +418,25 @@ export default function App() {
         const res2 = await fetch(`${API_URL}/query`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ input: inputToSend, history: historyToSend, user_id: userId, username, session_id: sessionToSend }),
+          body: JSON.stringify({ input: inputToSend, history: historyToSend, user_id: userId, username, session_id: sessionToSend, function_stage: functionStage }),
         })
         const data = await res2.json()
         if (!res2.ok) throw new Error(data.error || 'API error')
         setHistory(data.history || history)
+        finalHistoryRef.current = data.history || history
+        const c = data.content
+        if (c && typeof c === 'object' && typeof c.text === 'string' && c.text.trim()) {
+          finalAnswerTextRef.current = c.text
+        }
+        if (c && typeof c === 'object' && c.tool_timings && typeof c.tool_timings === 'object') {
+          toolTimingsRef.current = { ...toolTimingsRef.current, ...c.tool_timings }
+        }
+      }
+
+      // Persist this turn in the append-only transcript unless the backend told
+      // us the history was corrupt (that path retries and will commit on success).
+      if (!clearHistoryRef.current) {
+        commitTurn(inputToSend)
       }
     } catch (e) {
       setError(String(e))
@@ -347,10 +447,22 @@ export default function App() {
   }
 
   function clearHistory() {
+    // Finalize the old session's checkpoint (fold in any un-checkpointed tail) before
+    // abandoning it — it stays durable and recallable later by browser (user_id).
+    const oldSessionId = sessionId
+    const oldHistory = finalHistoryRef.current || history
+    if (oldSessionId && oldHistory && oldHistory.length) {
+      fetch(`${API_URL}/checkpoint/finalize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: userId, username, session_id: oldSessionId, history: oldHistory }),
+      }).catch(() => {})
+    }
     const newSessionId = crypto.randomUUID()
+    localStorage.setItem('mcp_session_id', newSessionId)
     setError(null)
     setHistory(null)
-    setTurns([])
+    setTranscript([])
     setSessionId(newSessionId)
     setStatus(null)
     setLiveMessage('')
@@ -361,32 +473,35 @@ export default function App() {
     setReasoningSteps([])
     setPendingQuestion(null)
     frozenReasoningRef.current = []
-    allReasoningRef.current = {}
-    allMapDataRef.current = {}
+    currentMapDataRef.current = null
+    finalHistoryRef.current = null
+    finalAnswerTextRef.current = ''
+    clearHistoryRef.current = false
     submitQuestion(SESSION_GREETING(username), null, newSessionId)
   }
 
-  async function resetBackend() {
-    setLoading(true)
+  async function toggleFunctionStage() {
+    const next = functionStage === 'prod' ? 'dev' : 'prod'
+    setStageSwitching(true)
     setError(null)
     try {
-      const res = await fetch(`${API_URL}/reset`, { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+      const res = await fetch(`${API_URL}/function_stage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stage: next }),
+      })
       const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data.error || 'Failed to reset backend')
+      if (!res.ok) throw new Error(data.error || 'Failed to switch function stage')
+      const applied = data.function_stage || next
+      setFunctionStage(applied)
+      localStorage.setItem('mcp_function_stage', applied)
     } catch (e) { setError(String(e)) }
-    finally {
-      setMapData(null)
-      setStreamedOutput('')
-      setStatus(null)
-      setLiveMessage('')
-      setPatternSaved(false)
-      setLoading(false)
-    }
+    finally { setStageSwitching(false) }
   }
 
   // Greeting turn: hide the user bubble but show the AI's welcome response.
   const isGreeting = (t) => t.userText.startsWith('Hi, my username is')
-  const visibleTurns = turns
+  const visibleTurns = transcript
   const lastTurn = visibleTurns[visibleTurns.length - 1]
 
   return (
@@ -396,20 +511,36 @@ export default function App() {
         <img src="/leaflogo.png" alt="Logo" style={{ height: 44, width: 'auto' }} />
         <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: '#001E2B' }}>MongoDB Atlas MCP AI Demo</h1>
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <button
+            className="btn-secondary"
+            onClick={toggleFunctionStage}
+            disabled={stageSwitching}
+            title="Toggle which dynamic query functions the model can see. 'dev' surfaces in-development functions; 'prod' shows only published ones."
+            style={functionStage === 'dev'
+              ? { fontSize: 13, backgroundColor: '#FF5C35', borderColor: '#FF5C35', color: '#fff', display: 'inline-flex', alignItems: 'center', gap: 6, cursor: stageSwitching ? 'wait' : 'pointer', opacity: stageSwitching ? 0.7 : 1 }
+              : { fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 6, cursor: stageSwitching ? 'wait' : 'pointer', opacity: stageSwitching ? 0.7 : 1 }}
+          >
+            {stageSwitching && <span className="mcb-spinner" aria-hidden="true" />}
+            {stageSwitching ? 'Switching…' : `Functions: ${functionStage === 'dev' ? 'Dev' : 'Prod'}`}
+          </button>
           <label htmlFor="username-input" style={{ fontSize: 13, color: '#555' }}>User:</label>
           <input
             id="username-input"
             type="text"
             value={usernameDraft}
+            disabled={authLocked}
             onChange={e => setUsernameDraft(e.target.value)}
             onKeyDown={e => {
+              if (authLocked) return
               if (e.key === 'Enter') { setUsername(usernameDraft); setCookie('mcp_username', usernameDraft) }
             }}
-            style={{ fontSize: 13, padding: '4px 8px', border: '1px solid #ccc', borderRadius: 6, width: 130 }}
+            style={{ fontSize: 13, padding: '4px 8px', border: '1px solid #ccc', borderRadius: 6, width: 130, backgroundColor: authLocked ? '#f0f0f0' : '#fff', cursor: authLocked ? 'not-allowed' : 'text' }}
           />
-          <button className="btn-secondary" onClick={() => { setUsername(usernameDraft); setCookie('mcp_username', usernameDraft) }}>
-            Save
-          </button>
+          {!authLocked && (
+            <button className="btn-secondary" onClick={() => { setUsername(usernameDraft); setCookie('mcp_username', usernameDraft) }}>
+              Save
+            </button>
+          )}
         </div>
       </header>
 
@@ -421,11 +552,20 @@ export default function App() {
           </div>
         )}
 
+        {/* Initial load / hidden-greeting spinner: shown while the first response
+            is being generated (the greeting sets no pendingQuestion bubble). */}
+        {loading && !pendingQuestion && visibleTurns.filter(t => !isGreeting(t) || t.assistantText).length === 0 && (
+          <div className="mcb-loading">
+            <div className="mcb-spinner-lg" aria-hidden="true" />
+            <div className="mcb-loading-text">Warming up your assistant…</div>
+          </div>
+        )}
+
         {visibleTurns.map((turn, idx) => {
           const isLast = idx === visibleTurns.length - 1
           return (
             <ChatMessage
-              key={idx}
+              key={turn.id}
               userText={isGreeting(turn) ? null : turn.userText}
               assistantText={turn.assistantText}
               toolCalls={turn.toolCalls}
@@ -507,7 +647,6 @@ export default function App() {
         </div>
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
           <button className="btn-secondary" onClick={clearHistory} disabled={loading}>Clear chat</button>
-          <button className="btn-danger" onClick={resetBackend} disabled={loading}>Reset backend</button>
         </div>
       </footer>
     </div>

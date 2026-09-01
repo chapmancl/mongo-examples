@@ -1,5 +1,6 @@
 import contextvars
 import logging
+import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 from pymongo.errors import PyMongoError
 from pymongo import monitoring
@@ -89,12 +90,19 @@ class MongoDBClient:
     """
     def __init__(self, settings):
         self.db_url = None # set this if we're going to a cluster that is not our default from settings
-        self._connection_initialized = False
+        self._connection_initialized = False        
         self.client = {}
         self.db = {}
         self.collections: Dict[str, Any] = {}
         self.settings = settings
-
+        # Serialises (re)connection so concurrent in-process callers (e.g. many fan-out
+        # sub-agents sharing this client) don't race connect_to_mongodb / reset self.client
+        # mid-flight (which produced 'object list can't be used in await' + intake failures).
+        self._connect_lock = asyncio.Lock()
+        # Cached result of the last successful connect. Once connected, every caller returns
+        # this WITHOUT a per-call ping round-trip.
+        self._last_ping: Any = {}
+        
         # default should always be the config collection because it is the only one we know about at first
         self._db_name = self.settings.mcp_config_db
         self._collection_name = self.settings.mcp_config_col
@@ -113,7 +121,7 @@ class MongoDBClient:
         """Convert string OID fields to ObjectId objects in a dictionary"""
         if data is None:
             return data
-
+        
         result = {}
         for key, value in data.items():
             if key == "_id" and isinstance(value, str):
@@ -126,7 +134,7 @@ class MongoDBClient:
             else:
                 result[key] = value
         return result
-
+   
     async def upsert_document(self, collection_name: str, filter: Dict, update: Dict) -> Any:
         """Update or insert a document in a specified collection"""
         await self.ensure_connection()
@@ -135,11 +143,11 @@ class MongoDBClient:
         bdoc_update = self._convert_oid_to_objectid(update)
         result = await collection.update_one(bdoc_filter, bdoc_update, upsert=True)
         return result.upserted_id
-
+    
     def get_mongo_uri(self) -> str:
         """
         Get the complete MongoDB connection URI.
-
+        
         Returns:
             MongoDB connection string
         """
@@ -161,9 +169,9 @@ class MongoDBClient:
             # Make request to AWS checkip service with timeout
             response = requests.get('https://checkip.amazonaws.com', timeout=10)
             response.raise_for_status()  # Raise exception for bad status codes
-
+            
             ip_address = response.text.strip()
-
+            
             return ip_address
         except Exception as e:
             logger.error(f"Error fetching current IP: {e}")
@@ -171,7 +179,7 @@ class MongoDBClient:
 
     def get_collection(self, collection_name: str=None):
         """Get a specific collection by name"""
-        try:
+        try:                    
             if collection_name is None:
                 collection_name = self._collection_name
             if collection_name in self.collections:
@@ -183,50 +191,79 @@ class MongoDBClient:
         except Exception as e:
             logger.error(f"Error getting collection {collection_name} in {self._db_name} at {self.db_url}: {e}")
             raise e
+    
+    def reset_connection(self):
+        """Mark the shared connection stale so the NEXT ensure_connection rebuilds it.
+
+        Call this after a hard client/loop failure (Motor already auto-reconnects its pool
+        for transient network blips, so this is only for the rare dead-client case).
+        """
+        self._connection_initialized = False
+        self.client = {}
+        self.collections = {}
 
     async def ensure_connection(self):
-        """Ensure MongoDB connection is established"""
-        logger.debug(f"connecting to mongodb {self._db_name} {self._collection_name}")
-        ping_result = {}
-        if not self._connection_initialized:
-            ping_result = await self.connect_to_mongodb()
-        else:
-            try:
-                ping_result = await self.client.admin.command('ping')
-            except Exception:
-                # Loop may have changed (e.g. after reload); reconnect with a fresh client.
-                self._connection_initialized = False
-                self.client = {}
-                ping_result = await self.connect_to_mongodb()
-        return ping_result
+        """Validate that this instance's persistent, pooled connection is open and reuse
+        it; (re)connect ONLY when it was never opened or was reset after a failure.
 
+        Fast path: once connected, ALL callers get the cached connect result immediately with
+        NO network round-trip. Concurrent callers arriving during the initial connect wait on
+        the lock and then share that SAME result — only ONE coroutine actually connects.
+        Motor's own pool handles transient network blips; a hard-dead client surfaces as an
+        operation error — call reset_connection() (sets client back to {}) then retry, and the
+        next ensure_connection rebuilds. self.client is {} until opened / after a reset, so the
+        isinstance(dict) check is the 'is the pool open?' validation.
+        """
+        if self._connection_initialized and not isinstance(self.client, dict):
+            return self._last_ping
+        async with self._connect_lock:
+            # Re-check inside the lock — another coroutine may have connected while we waited.
+            if self._connection_initialized and not isinstance(self.client, dict):
+                return self._last_ping
+            self._last_ping = await self.connect_to_mongodb()
+            return self._last_ping
+    
     async def connect_to_mongodb(self):
         """Initialize MongoDB connection using settings.py configuration"""
         ping_result = None
         try:
             self.client = AsyncIOMotorClient(self.get_mongo_uri(), event_listeners=[_CAPTURE_LISTENER])
-
+            
             # Test the connection
             ping_result = await self.client.admin.command('ping')
             logger.debug(f"Successfully connected to MongoDB database: {self._db_name}")
-
+            
             self._set_locals()
             self._connection_initialized = True
-            # load all tools to return configs (best-effort; not all clients need this)
+            # load all tools to return configs (best-effort; not all clients need this).
+            # Address the freshly-created Motor client directly rather than via
+            # get_collection() — the collection cache may still hold a SYNC PyMongo
+            # collection from a prior sync_connect_to_mongodb(), whose .distinct() returns
+            # a list (not awaitable) → 'object list can't be used in await expression'.
             try:
-                self.ALLTOOLS = await self.get_collection(self.settings.mcp_config_col).distinct("Name",{ "active": True})
+                self.ALLTOOLS = await self.client[self._db_name][self.settings.mcp_config_col].distinct("Name", {"active": True})
             except Exception as e:
                 logger.warning(f"Could not load ALLTOOLS (non-fatal): {e}")
                 self.ALLTOOLS = []
-
+            
         except Exception as e:
             ip_address = self.get_current_ip()
             logger.error(f"Failed to connect to MongoDB from ip: {ip_address}: {e}")
-            self._connection_initialized = False
+            self._connection_initialized = False            
         return ping_result
 
     def sync_connect_to_mongodb(self):
-        """Synchronous version of connect_to_mongodb"""
+        """Ensure a persistent, pooled SYNC (pymongo) client is open and REUSE it.
+
+        pymongo.MongoClient maintains its own connection pool, so the client is created
+        ONCE and reused for the life of the process. Subsequent calls validate the existing
+        client and return immediately — NO fresh SRV+TLS+ping handshake per call (that was
+        the ~1.5s tax paid on every tool call via _refresh_tool_config). Rebuilds only when
+        never opened or reset after a failure (self.client set back to {} by reset_connection).
+        """
+        # Fast path: reuse the already-open pooled client.
+        if self._connection_initialized and isinstance(self.client, pymongo.MongoClient):
+            return True
         try:
             self.client = pymongo.MongoClient(self.get_mongo_uri())
             self.client.admin.command('ping')
@@ -235,12 +272,16 @@ class MongoDBClient:
         except Exception as e:
             ip_address = self.get_current_ip()
             self._connection_initialized = False
+            self.client = {}
             raise ConnectionError(f"Failed to connect to MongoDB from ip: {ip_address}: \r\n{e}")
         return self._connection_initialized
 
     def _set_locals(self):
         """Set local database and collection references if we have the settings"""
+        # Reset the collection cache on every (re)connect so a driver switch (sync PyMongo
+        # <-> async Motor) never leaves a stale cross-driver collection behind.
+        self.collections = {}
         if self._db_name:
-            self.db = self.client[self._db_name]
+            self.db = self.client[self._db_name]    
         if self._collection_name:
             self.collections[self._collection_name] = self.db[self._collection_name]

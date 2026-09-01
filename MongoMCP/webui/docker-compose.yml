@@ -10,7 +10,13 @@ services:
     environment:
       - MONGO_MCP_ROOT=${MONGO_MCP_ROOT}
       - MONGO_CREDS=${MONGO_CREDS}
-      - CACHE_NAMESPACE=local
+      #- CACHE_NAMESPACE=local
+      # Auth: local dev runs with auth disabled. Set AUTH_MODE=jwt only when
+      # testing behind a forward-auth proxy/IdP with a real token.
+      - AUTH_MODE=${AUTH_MODE:-disabled}
+      #- AUTH_JWKS_URL=${AUTH_JWKS_URL}
+      #- AUTH_ISSUER=${AUTH_ISSUER}
+      #- AUTH_REQUIRED_GROUPS=${AUTH_REQUIRED_GROUPS}
       #- COGNITO_CLIENT_ID=${COGNITO_CLIENT_ID}
       #- COGNITO_USERNAME=${COGNITO_USERNAME}
       #- COGNITO_PASSWORD=${COGNITO_PASSWORD}

@@ -320,3 +320,4 @@ class MongoSessionCache:
 def create_cache_key(tool_name: str, tool_input: Dict[str, Any]) -> str:
     """Module-level alias for MongoSessionCache.create_cache_key — kept for backward compatibility."""
     return MongoSessionCache.create_cache_key(tool_name, tool_input)
+

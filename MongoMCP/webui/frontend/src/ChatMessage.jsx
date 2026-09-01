@@ -255,6 +255,11 @@ export default function ChatMessage({
                         <div key={i}>
                           <div style={{ fontWeight: 600, color: '#001E2B', marginBottom: 4 }}>
                             <code style={{ background: '#e8f5ee', padding: '1px 6px', borderRadius: 4 }}>{tc.name}</code>
+                            {typeof tc.timeMs === 'number' && (
+                              <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 600, color: '#00684A' }}>
+                                {tc.timeMs} ms
+                              </span>
+                            )}
                           </div>
                           {tc.result !== undefined ? (
                             <JsonViewer data={tc.result} />

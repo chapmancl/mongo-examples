@@ -4,26 +4,20 @@
     "title": "MongoDB Vector Search MCP Server",
     "description": "A fastMCP MCP server that provides vector search capabilities using MongoDB's $search aggregation pipeline.",
     "database": "sample_airbnb",
-    "collection": "listingsAndReviews",
-    "url":"cluster.mongodb.net"
+    "url": "demo.mongodb.net",
+    "collection": "listingsAndReviews"
   },
   "tools": {
     "vector_search": {
       "description": "Perform semantic vector similarity search on MongoDB collection using AI embeddings.\n\nThis tool converts natural language queries into vector embeddings using Amazon Titan Embeddings v2 and finds semantically similar property listings. It's ideal for finding properties based on meaning and context rather than exact keyword matches.\n\nUse cases:\n- \"Find a cozy apartment near Central Park\" (semantic understanding of 'cozy')\n- \"Spacious family home with modern amenities\" (understands family needs)\n- \"Romantic getaway with city views\" (contextual search)",
-      "index": "listing_vector_index",
+      "index": "listing_voyage_index",
       "required": [
-        "query_text",
-        "collection"
+        "query_text"
       ],
       "parameters": {
         "query_text": {
           "type": "str",
           "description": "Natural language query describing desired property characteristics. The text will be automatically converted to a 1024-dimensional vector."
-        },
-        "collection": {
-          "type": "str",
-          "description": "The name of the collection this query will execute against. must be listingsAndReviews",
-          "value": "listingsAndReviews"
         },
         "limit": {
           "type": "int",
@@ -64,11 +58,13 @@
         "space": 0,
         "transit": 0,
         "access": 0,
-        "reviews":0,
-        "voyage_embedding": 0
+        "voyage_embedding": 0,
+        "reviews": 0
       },
-      "collection":"listingsAndReviews",
-      "returns": "JSON with results array containing matching properties ranked by semantic similarity, each with a similarity score (0.0-1.0, higher is more similar)."
+      "collection": "listingsAndReviews",
+      "returns": "JSON with results array containing matching properties ranked by semantic similarity, each with a similarity score (0.0-1.0, higher is more similar).",
+      "handler": "vector_search",
+      "vector_path": "voyage_embedding"
     },
     "get_unique_values": {
       "description": "Get unique values for a specific field in the MongoDB collection. This tool retrieves all unique values for a specified field to determine what filter options are available when using vector_search. Use the get_collection_info tool to see what fields are available in the collection, then use this tool to see what values exist for those filters.",
@@ -118,6 +114,289 @@
         }
       },
       "returns": "JSON with results array containing the aggregation results, along with metadata about the query execution including result count and pipeline information."
+    },
+    "fn_airbnb_price_map": {
+      "handler": "multi_step",
+      "stage": "prod",
+      "collection": "listingsAndReviews",
+      "steps": [
+        {
+          "collection": "listingsAndReviews",
+          "extract": {
+            "listing_ids": {
+              "field": "_id",
+              "mode": "list"
+            }
+          },
+          "filters": [
+            [
+              "address.market",
+              "{{market}}"
+            ]
+          ],
+          "index": "listing_vector_index",
+          "limit": 40,
+          "name": "ranked",
+          "num_candidates": 300,
+          "query_text": "{{query_text}}",
+          "uses": "vector_search",
+          "vector_path": "embedding"
+        },
+        {
+          "collection": "listingsAndReviews",
+          "name": "render",
+          "pipeline": [
+            {
+              "$match": {
+                "_id": {
+                  "$in": "{{listing_ids}}"
+                }
+              }
+            },
+            {
+              "$addFields": {
+                "__rank": {
+                  "$indexOfArray": [
+                    "{{listing_ids}}",
+                    "$_id"
+                  ]
+                },
+                "priceNum": {
+                  "$convert": {
+                    "input": "$price",
+                    "onError": null,
+                    "onNull": null,
+                    "to": "double"
+                  }
+                }
+              }
+            },
+            {
+              "$sort": {
+                "__rank": 1
+              }
+            },
+            {
+              "$addFields": {
+                "tier": {
+                  "$switch": {
+                    "branches": [
+                      {
+                        "case": {
+                          "$lt": [
+                            "$priceNum",
+                            150
+                          ]
+                        },
+                        "then": "Budget"
+                      },
+                      {
+                        "case": {
+                          "$lte": [
+                            "$priceNum",
+                            300
+                          ]
+                        },
+                        "then": "Mid"
+                      }
+                    ],
+                    "default": "Premium"
+                  }
+                },
+                "tierColor": {
+                  "$switch": {
+                    "branches": [
+                      {
+                        "case": {
+                          "$lt": [
+                            "$priceNum",
+                            150
+                          ]
+                        },
+                        "then": "#00AA00"
+                      },
+                      {
+                        "case": {
+                          "$lte": [
+                            "$priceNum",
+                            300
+                          ]
+                        },
+                        "then": "#FFA500"
+                      }
+                    ],
+                    "default": "#FF0000"
+                  }
+                }
+              }
+            },
+            {
+              "$group": {
+                "_id": null,
+                "avgLat": {
+                  "$avg": {
+                    "$arrayElemAt": [
+                      "$address.location.coordinates",
+                      1
+                    ]
+                  }
+                },
+                "avgLng": {
+                  "$avg": {
+                    "$arrayElemAt": [
+                      "$address.location.coordinates",
+                      0
+                    ]
+                  }
+                },
+                "budget": {
+                  "$sum": {
+                    "$cond": [
+                      {
+                        "$eq": [
+                          "$tier",
+                          "Budget"
+                        ]
+                      },
+                      1,
+                      0
+                    ]
+                  }
+                },
+                "markers": {
+                  "$push": {
+                    "beds": "$beds",
+                    "color": "$tierColor",
+                    "id": {
+                      "$toString": "$_id"
+                    },
+                    "label": "$name",
+                    "lat": {
+                      "$arrayElemAt": [
+                        "$address.location.coordinates",
+                        1
+                      ]
+                    },
+                    "listing_url": "$listing_url",
+                    "lng": {
+                      "$arrayElemAt": [
+                        "$address.location.coordinates",
+                        0
+                      ]
+                    },
+                    "price": "$priceNum",
+                    "priceTier": "$tier",
+                    "rating": "$review_scores.review_scores_rating"
+                  }
+                },
+                "maxPrice": {
+                  "$max": "$priceNum"
+                },
+                "mid": {
+                  "$sum": {
+                    "$cond": [
+                      {
+                        "$eq": [
+                          "$tier",
+                          "Mid"
+                        ]
+                      },
+                      1,
+                      0
+                    ]
+                  }
+                },
+                "minPrice": {
+                  "$min": "$priceNum"
+                },
+                "premium": {
+                  "$sum": {
+                    "$cond": [
+                      {
+                        "$eq": [
+                          "$tier",
+                          "Premium"
+                        ]
+                      },
+                      1,
+                      0
+                    ]
+                  }
+                },
+                "total": {
+                  "$sum": 1
+                }
+              }
+            },
+            {
+              "$project": {
+                "_id": 0,
+                "center": {
+                  "lat": "$avgLat",
+                  "lng": "$avgLng"
+                },
+                "colorLegend": [
+                  {
+                    "color": "#00AA00",
+                    "label": "Budget (<$150)"
+                  },
+                  {
+                    "color": "#FFA500",
+                    "label": "Mid ($150-300)"
+                  },
+                  {
+                    "color": "#FF0000",
+                    "label": "Premium (>$300)"
+                  }
+                ],
+                "jsonDataType": "geospatial_scatter",
+                "markers": 1,
+                "metadata": {
+                  "market": "{{market}}",
+                  "total": "$total"
+                },
+                "summary": {
+                  "byTier": {
+                    "budget": "$budget",
+                    "mid": "$mid",
+                    "premium": "$premium"
+                  },
+                  "center": {
+                    "lat": "$avgLat",
+                    "lng": "$avgLng"
+                  },
+                  "maxPrice": "$maxPrice",
+                  "minPrice": "$minPrice",
+                  "total": "$total"
+                }
+              }
+            }
+          ],
+          "uses": "aggregate"
+        }
+      ],
+      "parameters": {
+        "market": {
+          "default": "",
+          "description": "address.market value to constrain results to a city, e.g. 'Barcelona', 'New York'. Applied as a native vector-search filter so the map stays in the right city.",
+          "type": "string"
+        },
+        "query_text": {
+          "description": "Natural-language semantic ranking intent, e.g. 'cozy apartment near the beach with a view'.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query_text"
+      ],
+      "output": "render",
+      "description": "Semantic Airbnb listing search rendered on a geospatial_scatter map color-coded by price tier. Step 1 runs a semantic vector search on query_text and applies the requested market as a native vector-search filter (address.market is a filter field on listing_vector_index) so the ANN itself is constrained to the correct city. Step 2 casts the string price to a number, buckets into price tiers (Budget <$150 green, Mid $150-300 orange, Premium >$300 red), preserves vector rank, and projects a geospatial_scatter render document (markers, colorLegend, center, metadata) plus a compact summary object (total, byTier counts, minPrice, maxPrice, center). Call with bypass=true so the map renders to the UI and only the summary returns to the model.",
+      "returns": "",
+      "available_indexes": [],
+      "version_seq": 7,
+      "source_strategy_name": "airbnb_listing_map_output",
+      "created_at": "2026-07-22T21:23:33.246566+00:00",
+      "published_version_seq": 7
     }
   },
   "active": true
@@ -129,7 +408,7 @@
     "description": "A fastMCP MCP server that provides search capabilities using MongoDB's aggregation pipeline.",
     "database": "sample_mflix",
     "collection": "movies",
-    "url":"cluster.mongodb.net"
+    "url": "demo.mongodb.net"
   },
   "tools": {
     "get_unique_values": {
@@ -185,75 +464,13 @@
   "active": true
 },
 {
-  "Name": "WeatherSearch",
-  "module_info": {
-    "title": "MongoDB MCP Server for searching historical weather data",
-    "description": "A fastMCP MCP server that provides search capabilities using MongoDB's aggregation pipeline.",
-    "database": "sample_weatherdata",
-    "collection": "data",
-    "url":"cluster.mongodb.net"
-  },
-  "tools": {
-    "get_unique_values": {
-      "description": "Get unique values for a specific field in the MongoDB collection. This tool retrieves all unique values for a specified field to determine what filter options are available when using vector_search. Use the get_collection_info tool to see what fields are available in the collection, then use this tool to see what values exist for those filters.",
-      "required": [
-        "field",
-        "collection"
-      ],
-      "parameters": {
-        "collection": {
-          "type": "str",
-          "description": "The name of the collection this query will execute against. This tool can execute against any collection."
-        },
-        "field": {
-          "type": "str",
-          "description": "The field name to get unique values for. Can be nested fields using dot notation."
-        }
-      },
-      "returns": "JSON with unique values array for the specified field, along with count information."
-    },
-    "get_collection_info": {
-      "description": "Get comprehensive information about the MongoDB collection, database statistics, and search capabilities.\n\nThis tool provides essential metadata about the current database connection and collection status, including document counts, storage size, available indexes, and search configuration. Use this tool to understand the current state of the data and search capabilities.",
-      "required": [],
-      "parameters": {},
-      "returns": "JSON containing complete collection metadata including document count, size, indexes, and search configuration details."
-    },
-    "aggregate_query": {
-      "description": "Execute a custom MongoDB aggregation pipeline query on the collection.\n\nThis tool allows you to run complex MongoDB aggregation queries with full flexibility. You can use any MongoDB aggregation stage including $match, $group, $project, $sort, $lookup, $unwind, $addFields, and many others. This is the most powerful tool for complex data analysis and custom queries.",
-      "reference_documentation": "https://www.mongodb.com/docs/manual/reference/mql/aggregation-stages/#std-label-aggregation-pipeline-operator-reference",
-      "required": [
-        "pipeline",
-        "collection"
-      ],
-      "parameters": {
-        "collection": {
-          "type": "str",
-          "description": "The name of the collection this query will execute against. This tool can execute against any collection."
-        },
-        "pipeline": {
-          "type": "List[Dict[str, Any]]",
-          "description": "MongoDB aggregation pipeline as a list of stage objects. Each stage should be a dictionary representing a MongoDB aggregation stage like $match, $group, $project, $sort, etc."
-        },
-        "limit": {
-          "type": "Optional[int]",
-          "default": null,
-          "constraints": "ge=1, le=1000",
-          "description": "Optional limit to apply to the results. If not specified, no limit will be applied. Recommended for large result sets to avoid memory issues."
-        }
-      },
-      "returns": "JSON with results array containing the aggregation results, along with metadata about the query execution including result count and pipeline information."
-    }
-  },
-  "active": false
-},
-{
   "Name": "shipwreckSearch",
   "module_info": {
     "title": "MongoDB MCP Server for searching historical shipwreck data",
     "description": "A fastMCP MCP server that provides search capabilities using MongoDB's aggregation pipeline.",
     "database": "sample_geospatial",
-    "collection": "shipwrecks",
-    "url": "demo1.mongodb.net"
+    "url": "demo.mongodb.net",
+    "collection": "shipwrecks"
   },
   "tools": {
     "get_unique_values": {
@@ -310,8 +527,7 @@
       "location_field": "coordinates",
       "required": [
         "longitude",
-        "latitude",
-        "collection"
+        "latitude"
       ],
       "parameters": {
         "longitude": {
@@ -347,15 +563,6 @@
           "default": 10,
           "constraints": "ge=1, le=100",
           "description": "Maximum number of results to return (default: 10, max: 100)."
-        },
-        "collection": {
-          "type": "str",
-          "description": "This value should always be shipwrecks for this tool"
-        },
-        "geo_field": {
-          "type": "str",
-          "default": "coordinates",
-          "description": "The name of the field containing geospatial data. This should be a GeoJSON point field. Default is 'coordinates'."
         }
       },
       "projection": {
@@ -365,10 +572,274 @@
         "coordinates": 1,
         "distance_meters": 1
       },
-      "returns": "JSON with results array containing shipwrecks located within the specified distance of the given coordinates, sorted by proximity, each including a distance_meters field."
+      "returns": "JSON with results array containing shipwrecks located within the specified distance of the given coordinates, sorted by proximity, each including a distance_meters field.",
+      "collection": "shipwrecks"
+    },
+    "fn_shipwrecks_by_hazard": {
+      "handler": "multi_step",
+      "stage": "dev",
+      "collection": "shipwrecks",
+      "steps": [
+        {
+          "name": "hazard_map",
+          "uses": "aggregate",
+          "collection": "shipwrecks",
+          "pipeline": [
+            {
+              "$geoNear": {
+                "distanceField": "distance_meters",
+                "key": "coordinates",
+                "maxDistance": "{{maxDistanceMeters}}",
+                "near": {
+                  "coordinates": [
+                    "{{lng}}",
+                    "{{lat}}"
+                  ],
+                  "type": "Point"
+                },
+                "spherical": true
+              }
+            },
+            {
+              "$limit": "{{resultLimit}}"
+            },
+            {
+              "$addFields": {
+                "bucket": {
+                  "$switch": {
+                    "branches": [
+                      {
+                        "case": {
+                          "$eq": [
+                            "$feature_type",
+                            "Wrecks - Submerged, dangerous"
+                          ]
+                        },
+                        "then": "dangerous"
+                      },
+                      {
+                        "case": {
+                          "$eq": [
+                            "$feature_type",
+                            "Wrecks - Submerged, nondangerous"
+                          ]
+                        },
+                        "then": "nondangerous"
+                      },
+                      {
+                        "case": {
+                          "$eq": [
+                            "$feature_type",
+                            "Wrecks - Visible"
+                          ]
+                        },
+                        "then": "visible"
+                      }
+                    ],
+                    "default": "other"
+                  }
+                },
+                "km": {
+                  "$divide": [
+                    "$distance_meters",
+                    1000
+                  ]
+                }
+              }
+            },
+            {
+              "$group": {
+                "_id": null,
+                "cntDangerous": {
+                  "$sum": {
+                    "$cond": [
+                      {
+                        "$eq": [
+                          "$bucket",
+                          "dangerous"
+                        ]
+                      },
+                      1,
+                      0
+                    ]
+                  }
+                },
+                "cntNonDangerous": {
+                  "$sum": {
+                    "$cond": [
+                      {
+                        "$eq": [
+                          "$bucket",
+                          "nondangerous"
+                        ]
+                      },
+                      1,
+                      0
+                    ]
+                  }
+                },
+                "cntOther": {
+                  "$sum": {
+                    "$cond": [
+                      {
+                        "$eq": [
+                          "$bucket",
+                          "other"
+                        ]
+                      },
+                      1,
+                      0
+                    ]
+                  }
+                },
+                "cntVisible": {
+                  "$sum": {
+                    "$cond": [
+                      {
+                        "$eq": [
+                          "$bucket",
+                          "visible"
+                        ]
+                      },
+                      1,
+                      0
+                    ]
+                  }
+                },
+                "farthestKm": {
+                  "$max": "$km"
+                },
+                "markers": {
+                  "$push": {
+                    "category": "$feature_type",
+                    "lat": {
+                      "$arrayElemAt": [
+                        "$coordinates",
+                        1
+                      ]
+                    },
+                    "lng": {
+                      "$arrayElemAt": [
+                        "$coordinates",
+                        0
+                      ]
+                    },
+                    "tooltip": {
+                      "$concat": [
+                        "$feature_type",
+                        " | ",
+                        {
+                          "$toString": {
+                            "$round": [
+                              "$km",
+                              1
+                            ]
+                          }
+                        },
+                        " km"
+                      ]
+                    }
+                  }
+                },
+                "nearestKm": {
+                  "$min": "$km"
+                },
+                "total": {
+                  "$sum": 1
+                }
+              }
+            },
+            {
+              "$project": {
+                "_id": 0,
+                "jsonDataType": "geospatial_scatter",
+                "markers": "$markers",
+                "summary": {
+                  "byCategory": {
+                    "dangerous": "$cntDangerous",
+                    "nondangerous": "$cntNonDangerous",
+                    "other": "$cntOther",
+                    "visible": "$cntVisible"
+                  },
+                  "dangerousPct": {
+                    "$round": [
+                      {
+                        "$multiply": [
+                          {
+                            "$cond": [
+                              {
+                                "$eq": [
+                                  "$total",
+                                  0
+                                ]
+                              },
+                              0,
+                              {
+                                "$divide": [
+                                  "$cntDangerous",
+                                  "$total"
+                                ]
+                              }
+                            ]
+                          },
+                          100
+                        ]
+                      },
+                      1
+                    ]
+                  },
+                  "farthestKm": {
+                    "$round": [
+                      "$farthestKm",
+                      1
+                    ]
+                  },
+                  "nearestKm": {
+                    "$round": [
+                      "$nearestKm",
+                      1
+                    ]
+                  },
+                  "total": "$total"
+                },
+                "title": "Shipwrecks by Hazard Level"
+              }
+            }
+          ]
+        }
+      ],
+      "parameters": {
+        "lat": {
+          "description": "Latitude of search center",
+          "type": "number"
+        },
+        "lng": {
+          "description": "Longitude of search center",
+          "type": "number"
+        },
+        "maxDistanceMeters": {
+          "default": 250000,
+          "description": "Max search radius in meters",
+          "type": "number"
+        },
+        "resultLimit": {
+          "default": 100,
+          "description": "Max wrecks to consider",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "lng",
+        "lat"
+      ],
+      "output": "hazard_map",
+      "description": "Find shipwrecks within maxDistanceMeters of a [lng,lat] center using the indexed coordinates 2dsphere field, bucket each by navigation hazard level (dangerous/nondangerous/visible), and return a geospatial_scatter render doc plus a compact summary. v2: summary now also includes dangerousPct (share of dangerous wrecks). Derived from the verified 'Shipwreck Geospatial Mapping by Hazard Level' strategy.",
+      "returns": "",
+      "available_indexes": [],
+      "version_seq": 2,
+      "source_strategy_name": "Shipwreck Geospatial Mapping by Hazard Level",
+      "created_at": "2026-07-22T18:41:01.021386+00:00"
     }
   },
   "active": true
-}
-
-]
+}]

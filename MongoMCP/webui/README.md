@@ -8,7 +8,13 @@ For local development, this UI expects the MCP server to be running separately a
 
 ## Required Local Settings
 
-Before running the Web UI locally, update `webui/local_settings.py` with your MongoDB connection details:
+Before running the Web UI locally, create `webui/local_settings.py` from the
+tracked template and update it with your MongoDB connection details:
+
+```bash
+cp local_settings.example.py local_settings.py
+cp ../local_settings.example.py ../local_settings.py
+```
 
 ```python
 self._credentials = {
@@ -18,7 +24,7 @@ self._credentials = {
 }
 ```
 
-The same `_credentials` values must also be set in `../local_settings.py` so both the MCP server and Web UI point at the same MongoDB cluster.
+The same `_credentials` values must also be set in `../local_settings.py` so both the MCP server and Web UI point at the same MongoDB cluster. Both local settings files are ignored by Git.
 
 You must also set the Web UI token from the output of `python ../tools/mongosetup.py`:
 

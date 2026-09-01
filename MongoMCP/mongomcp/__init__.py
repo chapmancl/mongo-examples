@@ -28,10 +28,10 @@ from .mongo_token_verifier import MongoTokenVerifier
 from .mongodb_client import MongoDBClient
 from .memory import register_memory_tools, get_memory_bedrock_toolspecs
 from .tools import register_query_tools
-from .agent import register_agent_tools, get_agent_bedrock_toolspecs
+from .agent import register_agent_tools, get_agent_bedrock_toolspecs, register_function_builder_tools, get_function_builder_toolspecs, register_external_api_tools, get_external_api_toolspecs
 
 # Package version
-__version__ = "3.2.0"
+__version__ = "3.2.1"
 
 # Expose main classes at package level
 __all__ = [
@@ -46,4 +46,8 @@ __all__ = [
    "register_query_tools",
    "register_agent_tools",
    "get_agent_bedrock_toolspecs",
+   "register_function_builder_tools",
+   "get_function_builder_toolspecs",
+   "register_external_api_tools",
+   "get_external_api_toolspecs",
 ]

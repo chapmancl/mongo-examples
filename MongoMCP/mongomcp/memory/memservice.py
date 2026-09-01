@@ -49,6 +49,12 @@ FULLTEXT_IDX_STRATEGIES = "memory_semantic_fulltext_index"
 
 NEAR_DUPLICATE_THRESHOLD = 0.92  # cosine similarity at which we warn of near-duplicate
 
+# Memory types excluded from recall UNLESS explicitly requested via memory_types=[...].
+# Single source of truth — add/change entries here (e.g. "conversation:checkpoint")
+# without touching individual functions. Applied as a $nin pre-filter in
+# _build_atlas_filter when the caller passes no explicit memory_types.
+DEFAULT_EXCLUDED_MEMORY_TYPES = ["conversation"]
+
 # Built-in schema for routing patterns stored in memory_semantic (memory_type='strategy').
 ROUTING_PATTERN_SCHEMA = {
     "tools":       {"required": True,  "type": "list",   "description": "Tool names selected for this pattern"},
@@ -274,6 +280,9 @@ class MemoryService:
                 f["session_id"] = {"$eq": session_id}
             if memory_types:
                 f["memory_type"] = {"$in": memory_types}
+            elif DEFAULT_EXCLUDED_MEMORY_TYPES:
+                # No explicit type requested → hide auto-excluded types (e.g. conversation).
+                f["memory_type"] = {"$nin": DEFAULT_EXCLUDED_MEMORY_TYPES}
             if tags:
                 f["tags"] = {"$in": tags}
             if importance_threshold > 0:
@@ -281,6 +290,9 @@ class MemoryService:
         else:  # memory_semantic
             if memory_types:
                 f["memory_type"] = {"$in": memory_types}
+            elif DEFAULT_EXCLUDED_MEMORY_TYPES:
+                # No explicit type requested → hide auto-excluded types (e.g. conversation).
+                f["memory_type"] = {"$nin": DEFAULT_EXCLUDED_MEMORY_TYPES}
             if tags:
                 f["tags"] = {"$in": tags}
             # Do NOT add agent_id filter on semantic — cross-agent sharing uses post-filter.
@@ -330,7 +342,7 @@ class MemoryService:
     async def _run_rerank(
         self,
         query: str,
-        docs: List[dict],
+        docs: List[dict],        
         top_k: Optional[int] = None,
         content_field: str = "content",
     ) -> List[dict]:
@@ -348,7 +360,7 @@ class MemoryService:
         texts = [str(doc.get(content_field, "")) for doc in docs]
         results = await self.llm_client.rerank(
             query=query,
-            documents=texts,
+            documents=texts,            
             top_k=top_k,
         )
         # Map relevance scores back to the original docs by index.
@@ -367,7 +379,7 @@ class MemoryService:
 
     async def intake(
         self,
-        content: str,
+        content: Optional[str] = None,
         memory_type: str = "episodic",
         importance: float = 0.5,
         decay_rate: float = 0.01,
@@ -402,7 +414,12 @@ class MemoryService:
         target_coll_name = collection_for_scope(effective_scope_for_col)
         col = self._col(target_coll_name)
 
-        embedding = (await self.llm_client.generate_embedding(content))["vector"]
+        embedding = None
+        if content is not None:
+            # Only embed when content is actually (re)written. A payload-only update
+            # (e.g. a heartbeat $push) omits content, so the embedding call is skipped.
+            # is_query=False → embed stored content as a DOCUMENT (Voyage input_type).
+            embedding = (await self.llm_client.generate_embedding(content, is_query=False))["vector"]
 
         # --- Replace-in-place when _id is provided ---
         if _id:
@@ -416,12 +433,15 @@ class MemoryService:
                 return {"error": f"Invalid _id format: {_id!r}"}
 
             update_fields: Dict[str, Any] = {
-                "content": content,
-                "embedding": embedding,
                 "memory_type": memory_type,
                 "importance": importance,
                 "decay_rate": decay_rate,
             }
+            # content/embedding are only rewritten when content is supplied — a
+            # payload-only update leaves the existing vector untouched (no re-embed).
+            if content is not None:
+                update_fields["content"] = content
+                update_fields["embedding"] = embedding
             if tags is not None:
                 update_fields["tags"] = tags
             if entities is not None:
@@ -470,6 +490,10 @@ class MemoryService:
                 "updated": True,
                 "schema_warnings": schema_warnings,
             }
+
+        # Insert path: a brand-new memory REQUIRES content (and thus an embedding).
+        if content is None:
+            return {"error": "content is required to create a new memory (only _id updates may omit it)."}
 
         _now = datetime.datetime.now(datetime.timezone.utc)
 
@@ -1402,8 +1426,8 @@ class MemoryService:
                 ),
             }
 
-        if col_name == COLLECTION_STRATEGIES and "memory_type" not in mongo_filter:
-            mongo_filter = {**mongo_filter, "memory_type": "strategy"}
+        if col_name == COLLECTION_STRATEGIES and "strategy_key" not in mongo_filter:
+            mongo_filter = {**mongo_filter, "strategy_key": {"$exists": True}, "version_seq": {"$exists": True}}
 
         sort_direction = -1 if sort_dir == "desc" else 1
         raw_results: List[dict] = []
@@ -1497,7 +1521,7 @@ class MemoryService:
         col = self._col(COLLECTION_SCHEMAS)
         embed_content = content or f"Schema definition for {schema_name} (version {version})"
 
-        embedding = (await self.llm_client.generate_embedding(embed_content))["vector"]
+        embedding = (await self.llm_client.generate_embedding(embed_content, is_query=False))["vector"]
         memory_type_value = f"schema:{schema_name}"
         doc = {
             "schema_name": schema_name,
@@ -1589,6 +1613,20 @@ class MemoryService:
         await self._ensure_connected()
         col = self._col(COLLECTION_STRATEGIES)
 
+        # Enforce the 'strategy' namespace on memory_type: strategies must be stored
+        # as 'strategy' or 'strategy:<subtype>' (e.g. 'strategy:playbook_creation_guide')
+        # so they stay cleanly separable from schemas / promoted memories in the
+        # shared memory_semantic collection.
+        memory_type = (memory_type or "").strip()
+        if memory_type != "strategy" and not memory_type.startswith("strategy:"):
+            return {
+                "error": (
+                    f"Invalid memory_type {memory_type!r} for strategy_store: memory_type "
+                    "for a strategy must have 'strategy' as a prefix "
+                    "(use 'strategy' or 'strategy:<subtype>')."
+                )
+            }
+
         # --- In-place update path ---
         if _id:
             try:
@@ -1598,7 +1636,7 @@ class MemoryService:
             # Promote schema_version from payload if not passed at top level.
             if schema_version is None and payload and isinstance(payload.get("schema_version"), str):
                 schema_version = payload["schema_version"]
-            embedding = (await self.llm_client.generate_embedding(context))["vector"]
+            embedding = (await self.llm_client.generate_embedding(context, is_query=False))["vector"]
             update_fields: Dict[str, Any] = {
                 "content": context,
                 "embedding": embedding,
@@ -1659,9 +1697,9 @@ class MemoryService:
         if effective_scope == 0:  # SCOPE_SHARED
             importance = 0.98
             decay_rate = 0.0
-        embedding = (await self.llm_client.generate_embedding(context))["vector"]
+        embedding = (await self.llm_client.generate_embedding(context, is_query=False))["vector"]
         new_doc = {
-            "strategy_key": name,            # top-level canonical key
+            "strategy_key": name,            # top-level canonical key            
             "version_seq": new_version_seq,  # auto-incremented; highest = most recent
             "superseded_by": None,            # always None on insert; code sets after insert
             "memory_type": memory_type,
@@ -1757,46 +1795,60 @@ class MemoryService:
                     raw_results.append(doc)
                     results.append(strip_embedding(doc, COLLECTION_STRATEGIES))
                 self._schedule_bump_access(raw_results, default_collection=COLLECTION_STRATEGIES)
-                return {"strategies": results, "results": results, "count": len(results)}
+                return {"strategies": results, "count": len(results)}
             else:
                 # Return only the most recent version (highest version_seq).
                 doc = await self._get_most_recent_strategy(name)
                 if not doc:
-                    return {"strategies": [], "results": [], "count": 0}
+                    return {"strategies": [], "count": 0}
                 doc["_src_col"] = COLLECTION_STRATEGIES
                 self._schedule_bump_access([doc], default_collection=COLLECTION_STRATEGIES)
                 stripped = strip_embedding(doc, COLLECTION_STRATEGIES)
-                return {"strategies": [stripped], "results": [stripped], "count": 1}
+                return {"strategies": [stripped], "count": 1}
 
         if not query:
             # No query text — exact tag match (or plain find if no tags).
             # BM25 ($search) is avoided here: hyphens and other punctuation in tag
             # values are tokenized as delimiters, making exact tag lookup unreliable.
-            tag_filter: Dict[str, Any] = {}
+            #
+            # Collapse to the latest version per strategy_key so callers never see
+            # superseded versions (every historical version carries the same tags,
+            # so a raw tag match would otherwise return the whole version chain).
+            # Restrict to strategy docs via strategy_key existence — every strategy
+            # sets strategy_key, while schemas / promoted memories in the shared
+            # memory_semantic collection do not.
+            match: Dict[str, Any] = {"strategy_key": {"$exists": True}, "version_seq": {"$exists": True}}
             if tags:
-                tag_filter["tags"] = {"$in": tags}
+                match["tags"] = {"$in": tags}
+            pipeline: List[Dict[str, Any]] = [
+                {"$match": match},
+                {"$project": {"embedding": 0}},
+                {"$sort": {"version_seq": -1}},
+                {"$group": {
+                    "_id": "$strategy_key",
+                    "doc": {"$first": "$$ROOT"},
+                }},
+                {"$replaceRoot": {"newRoot": "$doc"}},
+                {"$sort": {"hit_count": -1, "created_at": -1}},
+                {"$limit": limit},
+            ]
             results: List[dict] = []
             raw_results: List[dict] = []
-            async for doc in col.find(
-                tag_filter,
-                projection={"embedding": 0},
-                sort=[("hit_count", -1), ("created_at", -1)],
-                limit=limit,
-            ):
+            async for doc in col.aggregate(pipeline):
                 doc["_src_col"] = COLLECTION_STRATEGIES
                 raw_results.append(doc)
                 results.append(strip_embedding(doc, COLLECTION_STRATEGIES))
             self._schedule_bump_access(raw_results, default_collection=COLLECTION_STRATEGIES)
-            return {"strategies": results, "results": results, "count": len(results)}
+            return {"strategies": results, "count": len(results)}
 
         query_vec = (await self.llm_client.generate_embedding(query, model_id=self.query_embedding_model_id))["vector"]
-        candidates = await self._strategy_rank_fusion(col, query, query_vec, limit, tags)
+        candidates = await self._strategy_rank_fusion(col, query, query_vec, limit, tags)        
         if candidates is None or len(candidates) == 0:
             logger.info("$rankFusion unavailable for strategy_recall, falling back to vector-only search")
             # $rankFusion unavailable — fall back to vector-only
             candidates = await self._strategy_vector_only(col, query_vec, limit, tags)
 
-        # Post-filter: accept flat 'strategy'
+        # Post-filter: accept flat 'strategy' 
         # Scoring: 0.6*position + 0.4*tag_overlap_ratio + hit_count log-norm boost.
         n = len(candidates)
         query_tags_set = set(tags) if tags else set()
@@ -1865,7 +1917,7 @@ class MemoryService:
                 logger.warning("hit_count increment failed: %s", exc)
 
         # Resolve parent playbook for results with payload.extends.
-        # This whole section needs to change - use related docs and some relation there...
+        # This whole section needs to change - use related docs and some relation there... 
         results: List[dict] = []
         for doc in top:
             stripped = strip_embedding(doc, COLLECTION_STRATEGIES)
@@ -1885,7 +1937,7 @@ class MemoryService:
 
         self._schedule_bump_access(top, default_collection=COLLECTION_STRATEGIES)
 
-        return {"strategies": results, "results": results, "count": len(results), "query": query}
+        return {"strategies": results, "count": len(results), "query": query}
 
     async def _strategy_rank_fusion(
         self,
@@ -1938,7 +1990,7 @@ class MemoryService:
             *([ {"$sort": {"_tag_match": -1}}] if tags else []),
             {"$limit": limit * 3},
             {"$project": {"embedding": 0}},
-        ]
+        ]        
         try:
             docs: List[dict] = []
             async for doc in col.aggregate(pipeline):
