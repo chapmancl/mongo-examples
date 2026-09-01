@@ -1,6 +1,0 @@
-# All webui dependencies (flask, flask-cors, gunicorn, requests, pydantic) are
-# provided by mongomcp[agent] installed in Dockerfile.base.
-# Add any webui-specific packages here that are NOT part of mongomcp[agent].
-
-# Forward-auth JWT verification (only imported when AUTH_MODE=jwt).
-PyJWT[crypto]>=2.8.0

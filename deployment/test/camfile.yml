@@ -1,0 +1,36 @@
+# For full details on every field/option, see documentation:
+# https://libertymutual.atlassian.net/wiki/x/7xHXDw
+---
+apiVersion: containers.libertymutual.com/v2
+kind: defaultapp
+metadata:
+  name: gem-mongodb-ai
+spec:
+  image: packages.lmig.com/1a63db20-0df6-459c-8d3d-d1f7cc4136cd-docker/gem-mongodb-ai:${env.BUILD_NUMBER}
+  replicas: 3
+  resources:
+    limits:
+      cpu: 400m
+      memory: 2048Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  env:
+    ARTIFACT_KEY: gem-mongodb-ai
+    BUILD_NUMBER: ${env.BUILD_NUMBER}
+    DB_URI: gem-exposure-repository-mongo-db-test-pl-0.z6v9s.mongodb.net
+  network:
+    ingress:
+      - hosts:
+        - gem-mongodb-ai-test.lmig.com
+        class: internal
+    routes:
+      - containerPort: 8001
+        paths:
+          - "/"
+          - "/user"
+          - "/health"
+  secrets:
+    SECRET__ID: SECRET__GEM_MONGODB_AI__TEST__ID
+    DB_USERNAME: SECRET__GEM_EXPOSURE_REPOSITORY_MONGO_DB_TEST__READ_WRITE_SHORT__USERNAME
+    DB_PASSWORD: SECRET__GEM_EXPOSURE_REPOSITORY_MONGO_DB_TEST__READ_WRITE_SHORT__PASSWORD

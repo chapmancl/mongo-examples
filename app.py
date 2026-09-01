@@ -1,0 +1,284 @@
+import os
+from flask import Flask, send_from_directory, request, jsonify, abort, Response
+from flask_cors import CORS
+import requests
+from mcp_processor import APIQueryProcessor, QueryResponse, QueryRequest
+from mongomcp import __version__ as MCP_VERSION
+import mimetypes
+import logging
+import traceback
+from typing import Optional, List, Any
+import threading
+import json
+
+
+mimetypes.add_type('application/javascript', '.js')
+
+app = Flask(__name__, static_folder=os.path.join(os.path.dirname(__file__), 'frontend', 'dist'))
+CORS(app)
+
+processor = APIQueryProcessor()
+_site_warmup_lock = threading.Lock()
+_site_warmup_done = False
+
+# logs were getting very bloated, lets reduce that a bit.
+logging.basicConfig(level=logging.INFO)
+logging.getLogger("mcp_processor").setLevel(logging.INFO)
+logging.getLogger("mongomcp.agent.tool_router").setLevel(logging.INFO)
+logging.getLogger("mongomcp.agent.webui_bedrock_client").setLevel(logging.INFO)
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
+def _warmup_tool_discovery_once() -> None:
+    """Run MCP tool discovery once on first site load."""
+    global _site_warmup_done
+    if _site_warmup_done:
+        return
+    with _site_warmup_lock:
+        if _site_warmup_done:
+            return
+        try:
+            # Triggers processor initialization path and exposes discovered config.
+            processor.get_mcp_config()
+            _site_warmup_done = True
+        except Exception:
+            # Do not block initial page load on warmup failure.
+            traceback.print_exc()
+
+@app.route('/health', methods=['GET'])
+def health():
+    """Health check endpoint."""
+    return jsonify({
+        "status": "ok",
+        "version": MCP_VERSION,
+        "processor_ready": processor.init_error is None,
+    }), 200
+
+<<<<<<< HEAD
+# @app.route('/secrethealth', methods=['GET'])
+def secrethealth():
+    """Health check endpoint."""
+    #  BJB print environment stuff for debug
+    result = testenv.show_env()
+    return jsonify({
+        "status": "ok",
+        "env": result
+    }), 200
+
+=======
+>>>>>>> 4fa9d710d0f558bd497ec24e1f83900c3427030c
+@app.route('/query', methods=['POST'])
+def api_query():
+    resp = '{"status": "error", "message": "Unknown error"}'  # Default error response
+    code = 500
+    try:
+        payload = request.get_json(force=True)
+        if processor.init_error:
+            raise ValueError(f"Processor initialization failed: {processor.init_error}")
+
+        q = (payload.get("input", "") or "").strip()
+        if not q:
+            raise ValueError("Empty input")
+        logger.info(f'query-Prompt: {q}')
+        req = QueryRequest(input=q, history=payload.get("history", []), user_id=payload.get("user_id"), session_id=payload.get("session_id"))
+        if q.startswith("clear history"):
+            resp = processor.clear_history().json()
+            code = 205
+        else:
+            resp = processor.query_with_mcp_tools(req).json()
+            code = 200
+
+    except Exception as e:
+        traceback.print_exc()
+        resp = QueryResponse(status="Error", error=str(e)).json()
+    
+    return jsonify(resp), code
+
+'''
+@app.route('/query/stream', methods=['POST'])
+def stream_query():
+    """Stream the response for long-running queries."""
+    # Read request payload here while request context is active
+    try:
+        payload = request.get_json(force=True)
+        # Pass a copy of payload into generator to avoid accessing `request` inside it
+        return Response(generate(payload), mimetype='application/x-ndjson')
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+'''
+@app.route('/query/stream', methods=['POST'])
+def stream_query():
+    try:
+        payload = request.get_json(force=True, silent=True) or {}
+        resp = Response(generate(payload), mimetype='text/event-stream')
+        resp.headers['X-Accel-Buffering'] = 'no'       # nginx/proxy: don't buffer
+        resp.headers['Cache-Control'] = 'no-cache, no-transform' # proxies: don't transform
+        resp.headers['Connection'] = 'keep-alive'
+        try:
+            logger.debug(f'query-streamResp: {payload}')
+        except Exception as e:
+            logger.debug(f'Messed up logger: {e}')
+        return resp
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+@app.route('/history/reset', methods=['POST'])
+def reset_history():
+    try:
+        if processor.init_error:
+            raise ValueError(f"Processor initialization failed: {processor.init_error}")
+
+        resp = processor.clear_history().json()
+        return jsonify(resp), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify(QueryResponse(status="Error", error=str(e)).json()), 500
+
+
+@app.route('/history', methods=['GET'])
+def get_history():
+    """Return trimmed conversation history for the UI debug panel."""
+    try:
+        if processor.init_error:
+            raise ValueError(f"Processor initialization failed: {processor.init_error}")
+        resp = processor.get_history()
+        return jsonify(resp.json()), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify(QueryResponse(status="Error", error=str(e)).json()), 500
+
+
+@app.route('/pattern/save', methods=['POST'])
+def save_pattern():
+    """Save the current interaction as a reusable query pattern."""
+    try:
+        if processor.init_error:
+            raise ValueError(f"Processor initialization failed: {processor.init_error}")
+        payload = request.get_json(force=True) or {}
+        user_id = (payload.get("user_id") or "").strip()
+        session_id = (payload.get("session_id") or "").strip()
+        resp = processor.save_pattern(user_id, session_id)
+        return jsonify(resp.json()), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify(QueryResponse(status="Error", error=str(e)).json()), 500
+
+
+@app.route('/feedback', methods=['POST'])
+def record_feedback():
+    """Record user feedback (positive/negative) on the last interaction."""
+    try:
+        if processor.init_error:
+            raise ValueError(f"Processor initialization failed: {processor.init_error}")
+        payload = request.get_json(force=True)
+        user_id = (payload.get("user_id") or "").strip()
+        session_id = (payload.get("session_id") or "").strip()
+        feedback = (payload.get("feedback") or "").strip()
+        if not user_id or not session_id or feedback not in ("positive", "negative"):
+            return jsonify({"error": "user_id, session_id, and feedback (positive|negative) required"}), 400
+        resp = processor.record_feedback(user_id, session_id, feedback)
+        return jsonify(resp.json()), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify(QueryResponse(status="Error", error=str(e)).json()), 500
+
+def generate(payload):
+    try:
+        if processor.init_error:
+            yield QueryResponse(error=f"Processor initialization failed: {processor.init_error}").json() + '\n'
+            return
+
+        q = (payload.get("input", "") or "").strip()
+        logger.debug(f"Stream started for: {payload.get('input', '')[:50]}") # BJB
+        if not q:
+            yield QueryResponse(status="Error", error="Empty input").json() + '\n'
+            return
+
+        # Generic threaded executor - returns (result, exception)
+        def execute_in_thread(func):
+            """Execute a function in a background thread and stream messages."""
+            result = [None]
+            exception = [None]
+            
+            def wrapper():
+                try:
+                    result[0] = func()
+                except Exception as e:
+                    exception[0] = e
+            
+            thread = threading.Thread(target=wrapper, daemon=True)
+            thread.start()
+            
+            # Stream messages as they arrive from the handler
+            while thread.is_alive():
+                for msg in processor.read_message_stream(timeout=0.1):
+                    yield msg + '\n'
+            
+            # Drain any remaining messages after thread completes
+            for msg in processor.pop_queued_messages():
+                yield msg + '\n'
+            
+            # Yield the final result and exception as a tuple
+            yield (result[0], exception[0])
+        
+        result = None
+        exception = None
+        
+        if q.startswith("clear history"):
+            for item in execute_in_thread(processor.clear_history):
+                if isinstance(item, tuple):
+                    result, exception = item
+                else:
+                    yield item
+        else:
+            yield QueryResponse(status='querying', message='Querying Claude with MCP tools...').json() + '\n'
+            req = QueryRequest(input=q, history=payload.get("history", []), user_id=payload.get("user_id"), session_id=payload.get("session_id"))
+            '''
+            BJB Added debugging instead
+            for item in execute_in_thread(lambda: processor.query_with_mcp_tools(req)):
+                if isinstance(item, tuple):
+                    result, exception = item
+                else:
+                    yield item
+            '''
+            for item in execute_in_thread(lambda: processor.query_with_mcp_tools(req)):
+                logger.debug(f"Yielding: {item[:200]}")
+                if isinstance(item, tuple):
+                    result, exception = item
+                else:
+                    # Validate before yielding
+                    try:
+                        json.loads(item.strip())  # Test parse
+                        yield item
+                    except json.JSONDecodeError:
+                        logger.error(f"Invalid JSON: {item[:100]}")
+                        yield QueryResponse(error="Stream format error").json() + '\n'
+            
+        # Yield final result
+        if exception:
+            yield QueryResponse(error=str(exception)).json() + '\n'
+        elif result:
+            yield result.json() + '\n'
+
+    except Exception as e:
+        logger.error(f"Stream generation error: {e}", exc_info=True) # BJB
+        traceback.print_exc()
+        yield QueryResponse(error=str(e)).json() + '\n'
+
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve(path):
+    static_folder = app.static_folder
+    app.logger.debug("serve: static_folder=%s", static_folder)
+    if path != "" and os.path.exists(os.path.join(static_folder, path)):
+        return send_from_directory(static_folder, path)
+    index_path = os.path.join(static_folder, 'index.html')
+    if os.path.exists(index_path):
+        _warmup_tool_discovery_once()
+        return send_from_directory(static_folder, 'index.html')
+    return "Frontend not found. you must first build the project.", 404
+
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=os.getenv("WEBSERVER_PORT", "8000"), debug=True)
