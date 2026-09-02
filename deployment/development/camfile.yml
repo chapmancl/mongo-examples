@@ -1,0 +1,36 @@
+# For full details on every field/option, see documentation:
+# https://libertymutual.atlassian.net/wiki/x/7xHXDw
+---
+apiVersion: containers.libertymutual.com/v2
+kind: defaultapp
+metadata:
+  name: gem-mongodb-mcpserver
+spec:
+  image: packages.lmig.com/7f398c34-5d21-4478-b5ec-c604801ea6b4-docker/gem-mongodb-mcpserver:${env.BUILD_NUMBER}
+  replicas: 4
+  resources:
+    limits:
+      cpu: 400m
+      memory: 2048Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  env:
+    ARTIFACT_KEY: gem-mongodb-mcpserver
+    BUILD_NUMBER: ${env.BUILD_NUMBER}
+  network:
+    ingress:
+      - hosts:
+        - gem-mongodb-mcpserver-development.lmig.com
+        class: internal
+    routes:
+      - containerPort: 8000
+        paths:
+          - "/"
+  secrets:
+    SECRET__ID: SECRET__GEM_MONGODB_MCPSERVER__DEVELOPMENT__ID
+    # NOTE: LibertyAIR client-credentials (SECRET__GEM_LIBERTYAIR_CLIENT__ID /
+    # SECRET__GEM_LIBERTYAIR_CLIENT__SECRET) are injected globally from the
+    # shared `gem-libertyair-client` secret — no camfile entry is needed and
+    # adding one breaks container creation (no per-app source secret exists).
+

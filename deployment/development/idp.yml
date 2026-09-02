@@ -1,0 +1,12 @@
+# The deployment will automatically apply a manifest named `deployment/<env>/idp.yml`
+# Renaming or deleting this file disables the IDP SPI in the workflow
+# Adding it back would re-enable the IDP SPI
+#
+# You own this file, update or delete it as required
+---
+idp:
+  - provider: azure
+    applications:
+      - name: gem-mongodb-mcpserver--development
+        email_address: gem@libertymutual.com
+        client: true

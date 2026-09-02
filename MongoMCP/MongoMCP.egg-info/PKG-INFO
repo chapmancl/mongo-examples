@@ -1,0 +1,41 @@
+Metadata-Version: 2.4
+Name: MongoMCP
+Version: 1.0.0
+Summary: MongoDB MCP package with middleware, search tools, and AWS Bedrock integration.
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: boto3>=1.34
+Requires-Dist: botocore>=1.34
+Requires-Dist: fastmcp>=2.14
+Requires-Dist: mcp>=1.25
+Requires-Dist: motor>=3.6
+Requires-Dist: pymongo>=4.10
+Requires-Dist: PyJWT>=2.8
+Requires-Dist: requests>=2.31
+Provides-Extra: agent
+Requires-Dist: flask; extra == "agent"
+Requires-Dist: flask-cors; extra == "agent"
+Requires-Dist: pydantic; extra == "agent"
+Requires-Dist: gunicorn; extra == "agent"
+
+# MongoMCP
+
+Self-contained Python package for MongoDB MCP components.
+
+## Install
+
+From this directory:
+
+```bash
+python -m pip install -e .
+```
+
+Or from anywhere:
+
+```bash
+python -m pip install -e /MongoMCP
+```
+
+## Package Layout
+
+This folder uses a flat package layout where `MongoMCP` is mapped to the current directory via `tool.setuptools.package-dir`.

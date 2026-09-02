@@ -1,0 +1,29 @@
+---
+packages:
+  repositories:
+  # read access to all docker repositories
+  - repository: image-docker-hub
+    permissions:
+    - read
+  - repository: image-shared
+    type: docker
+    permissions:
+    - read
+  - repository: image-lm-base
+    type: docker
+    permissions:
+    - read
+  # read/write access to this artifact's docker repository
+  - repository: 7f398c34-5d21-4478-b5ec-c604801ea6b4
+    type: docker
+    permissions:
+    - read
+    - write
+  # read access to all generic repositories
+  - repository: generic
+    permissions:
+    - read
+  # read access to pypi repository
+  - repository: pypi
+    permissions:
+    - read
