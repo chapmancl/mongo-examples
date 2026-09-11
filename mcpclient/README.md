@@ -46,7 +46,7 @@ python airbnb_mcp_cached.py
 ```
 
 **Interactive Commands:**
-- `clear` - Clear conversation history and all caches  
+- `clear` - Clear conversation history and all caches
 - `cache stats` - Show detailed cache statistics
 - `cache clear` - Clear all caches while keeping conversation history
 - `<question>` - Ask Claude with full MCP tool support and caching
@@ -98,7 +98,7 @@ LLM_MODEL_ID = "anthropic.claude-3-sonnet-20240229-v1:0"
 
 # MCP Server Configuration
 mong_mcp = "http://localhost:8000/mcp/"
-mongo_mcp_root = "http://localhost:8000" 
+mongo_mcp_root = "http://localhost:8000"
 ```
 
 ### 4. Run the Application

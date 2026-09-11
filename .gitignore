@@ -1,5 +1,6 @@
 # Python-generated files
 __pycache__/
+*__pycache__/
 *.py[oc]
 build/
 dist/
@@ -12,6 +13,9 @@ bin/
 pyvenv.cfg
 .python-version
 
+# node_modules
+*node_modules/
+
 
 
 # Virtual environments
@@ -19,3 +23,9 @@ pyvenv.cfg
 
 *.tfvars
 *Zone.Identifier
+*:Zone.Identifier
+
+# Local secrets
+.env
+.env.*
+!.env.example

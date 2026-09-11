@@ -1,0 +1,15 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Allow documented placeholders and local sample values"
+regexes = [
+  '''your-account-id''',
+  '''your-aws-region''',
+  '''YOUR_CERT_ARN_HERE''',
+  '''<<YOUR AWS ACCOUNT ID>>''',
+  '''mymongousername''',
+  '''mymongopassword''',
+  '''paste_the_AUTH_TOKEN_value_here''',
+  '''AUTH_TOKEN\s*=\s*"\.\.\."'''
+]

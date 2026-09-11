@@ -13,6 +13,8 @@ node_modules/
 pyvenv.cfg
 .python-version
 
+node_modules/
+
 
 
 # Virtual environments

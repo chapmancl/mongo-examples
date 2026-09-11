@@ -18,7 +18,7 @@ settings =  {
         "stream_instance": "vectorDemo",
         "cluster_connection_name": "airbnb-data",
         "endpoint_connection_name": "mcp-cluster-vectorize",
-        "processor_name": "AirBnB-ASP-Processor"        
+        "processor_name": "AirBnB-ASP-Processor"
     }
 # Headers
 HEADERS = {
@@ -29,37 +29,37 @@ HEADERS = {
 
 PIPELINE = [
     {
-       "$source": {  
+       "$source": {
             "connectionName": settings["connection_name"],
             "db": settings["db_name"],
             "coll": settings["collection_name"],
         "config": {
             "fullDocument": "required",
             "pipeline": [
-                {  
-                "$match": {  
+                {
+                "$match": {
                     "operationType": { "$in": ["insert", "update"] },
-                    
+
                 }}
             ]
-        }}                             
+        }}
     },
-    {  
-    "$addFields": {  
-        "fullDocument.concatenated_text": {  
-        "$trim": {  
-            "input": {  
-            "$concat": [  
-                { "$ifNull": ["$fullDocument.name", ""] }, " ",  
-                { "$ifNull": ["$fullDocument.summary", ""] }, " ",  
-                { "$ifNull": ["$fullDocument.space", ""] }, " ",  
-                { "$ifNull": ["$fullDocument.description", ""] }, " ",  
-                { "$ifNull": ["$fullDocument.property_type", ""] }, " ",  
-                { "$ifNull": ["$fullDocument.room_type", ""] }, " ",  
-                { "$ifNull": ["$fullDocument.bed_type", ""] } 
-            ]  
-            }  
-        }  
+    {
+    "$addFields": {
+        "fullDocument.concatenated_text": {
+        "$trim": {
+            "input": {
+            "$concat": [
+                { "$ifNull": ["$fullDocument.name", ""] }, " ",
+                { "$ifNull": ["$fullDocument.summary", ""] }, " ",
+                { "$ifNull": ["$fullDocument.space", ""] }, " ",
+                { "$ifNull": ["$fullDocument.description", ""] }, " ",
+                { "$ifNull": ["$fullDocument.property_type", ""] }, " ",
+                { "$ifNull": ["$fullDocument.room_type", ""] }, " ",
+                { "$ifNull": ["$fullDocument.bed_type", ""] }
+            ]
+            }
+        }
         }
     }},
     {
@@ -75,30 +75,30 @@ PIPELINE = [
         ]
     }},
 
-{  
-  "$set": {  
-    "fullDocument.embedding": {  
-      "$cond": {  
-        "if": { "$not": { "$ifNull": ["$apiResults.error", False] } },  
-        "then": "$apiResults.vector",  
+{
+  "$set": {
+    "fullDocument.embedding": {
+      "$cond": {
+        "if": { "$not": { "$ifNull": ["$apiResults.error", False] } },
+        "then": "$apiResults.vector",
         "else": "$$REMOVE"
-      }  
-    },  
-    "fullDocument.embedding_status": {  
-      "$cond": {  
-        "if": { "$ifNull": ["$apiResults.error", False] },  
-        "then": "failed",  
-        "else": "success"  
-      }  
-    },  
-    "fullDocument.embedding_error": {  
-      "$cond": {  
-        "if": { "$ifNull": ["$apiResults.error", False] },  
-        "then": "$apiResults.error",  
-        "else": "$$REMOVE"  
-      }  
+      }
+    },
+    "fullDocument.embedding_status": {
+      "$cond": {
+        "if": { "$ifNull": ["$apiResults.error", False] },
+        "then": "failed",
+        "else": "success"
+      }
+    },
+    "fullDocument.embedding_error": {
+      "$cond": {
+        "if": { "$ifNull": ["$apiResults.error", False] },
+        "then": "$apiResults.error",
+        "else": "$$REMOVE"
+      }
     }
-  }  
+  }
 },
 {
     "$unset": ["fullDocument.concatenated_text"]
@@ -108,14 +108,14 @@ PIPELINE = [
         "newRoot": "$fullDocument"
     }
 },
-    
+
     {
     "$merge": {
         "into": {
         "connectionName": settings["cluster_connection_name"],
         "db": settings["db_name"],
         "coll": settings["collection_name"]
-        },        
+        },
         "whenMatched": "merge"
     }}
 ]
@@ -131,7 +131,7 @@ class MongoDBASP():
         self.public_key: str = settings["public_key"]
         self.private_key: str = settings["private_key"]
         self.project_id: str = settings["project_id"]
-    
+
     def _get_auth(self) -> HTTPDigestAuth:
         """Create authentication object for API requests."""
         return HTTPDigestAuth(self.public_key, self.private_key)
@@ -149,102 +149,102 @@ class MongoDBASP():
             traceback.print_exc()
             return None
 
-    def update_stream_processor(self, pipeline):  
-        """  
-        Create a new stream processor with the given pipeline  
-        """  
-        url = f"{self.base_url}/groups/{self.project_id}/streams/{self.stream_instance}/processor/{settings["processor_name"]}"  
-        
+    def update_stream_processor(self, pipeline):
+        """
+        Create a new stream processor with the given pipeline
+        """
+        url = f"{self.base_url}/groups/{self.project_id}/streams/{self.stream_instance}/processor/{settings["processor_name"]}"
+
         # stop it first
-        stopresponse = requests.post(  
-            f"{url}:stop",                           
+        stopresponse = requests.post(
+            f"{url}:stop",
             headers=HEADERS,
             auth=self._get_auth()
-        )  
+        )
         print(f"Stopped processor response: {stopresponse.status_code}")
 
-        # Stream processor configuration  
-        processor_config = {  
-            "name": settings["processor_name"],  
+        # Stream processor configuration
+        processor_config = {
+            "name": settings["processor_name"],
             "pipeline": pipeline,
-            "options": {  
-                "dlq": {  
+            "options": {
+                "dlq": {
                     "connectionName": settings["cluster_connection_name"],
-                    "coll": "vector_stream_dlq",  
+                    "coll": "vector_stream_dlq",
                     "db": settings["db_name"]
-                }  
-            }  
-        }  
-          
-        response = requests.patch(  
-            url,  
-            json=processor_config,              
+                }
+            }
+        }
+
+        response = requests.patch(
+            url,
+            json=processor_config,
             headers=HEADERS,
             auth=self._get_auth()
-        )  
-          
-        if response.status_code == 200:  
-            print(f"Stream processor '{settings["processor_name"]}' updated successfully!")  
+        )
 
-            startresponse = requests.post(  
-                f"{url}:start",                           
+        if response.status_code == 200:
+            print(f"Stream processor '{settings["processor_name"]}' updated successfully!")
+
+            startresponse = requests.post(
+                f"{url}:start",
                 headers=HEADERS,
                 auth=self._get_auth()
-            )  
+            )
             print(f"Start processor response: {startresponse.status_code}")
 
-            return response.json()  
-        else:  
-            print(f"Error creating stream processor: {response.status_code}")  
-            print(response.text)  
-            return None  
-        
+            return response.json()
+        else:
+            print(f"Error creating stream processor: {response.status_code}")
+            print(response.text)
+            return None
 
-    def create_stream_processor(self, pipeline):  
-        """  
-        Create a new stream processor with the given pipeline  
-        """  
-        url = f"{self.base_url}/groups/{self.project_id}/streams/{self.stream_instance}/processor"  
-          
-        # Stream processor configuration  
-        processor_config = {  
-            "name": settings["processor_name"],  
+
+    def create_stream_processor(self, pipeline):
+        """
+        Create a new stream processor with the given pipeline
+        """
+        url = f"{self.base_url}/groups/{self.project_id}/streams/{self.stream_instance}/processor"
+
+        # Stream processor configuration
+        processor_config = {
+            "name": settings["processor_name"],
             "pipeline": pipeline,
-            "options": {  
-                "dlq": {  
+            "options": {
+                "dlq": {
                     "connectionName": settings["cluster_connection_name"],
-                    "coll": "stream_dlq",  
-                    "db": settings["db_name"] 
-                }  
-            }  
-        }  
-          
-        response = requests.post(  
-            url,  
-            json=processor_config,              
+                    "coll": "stream_dlq",
+                    "db": settings["db_name"]
+                }
+            }
+        }
+
+        response = requests.post(
+            url,
+            json=processor_config,
             headers=HEADERS,
             auth=self._get_auth()
-        )  
-          
-        if response.status_code == 200:  
-            print(f"Stream processor '{settings["processor_name"]}' created successfully!")  
+        )
+
+        if response.status_code == 200:
+            print(f"Stream processor '{settings["processor_name"]}' created successfully!")
             time.sleep(2)  # wait for 2 seconds before starting
-            startresponse = requests.post(  
-                f"{url}:start",                           
+            startresponse = requests.post(
+                f"{url}:start",
                 headers=HEADERS,
                 auth=self._get_auth()
-            )  
+            )
             print(f"Start processor response: {startresponse.status_code}")
 
-            return response.json()  
-        else:  
-            print(f"Error creating stream processor: {response.status_code}")  
-            print(response.text)  
-            return None  
-  
+            return response.json()
+        else:
+            print(f"Error creating stream processor: {response.status_code}")
+            print(response.text)
+            return None
 
 
-def main():    
+
+def main():
     asp = MongoDBASP()
     res = asp.run()
     #print(res)

@@ -1,0 +1,20 @@
+[{
+  "pvk": "",
+  "agent_name": "Mongo_ASP",
+  "agent_key": "",
+  "scope": [
+    "read",
+    "write",
+    "llm:invoke"
+  ]
+},
+{
+  "pvk": "",
+  "agent_name": "console_chatbot",
+  "agent_key": "",
+  "scope": [
+    "read",
+    "write",
+    "llm:invoke"
+  ]
+}]

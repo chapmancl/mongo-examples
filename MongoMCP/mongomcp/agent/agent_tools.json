@@ -1,0 +1,43 @@
+{
+  "agent_tools": [
+    {
+      "toolSpec": {
+        "name": "agent_run_prompt",
+        "description": "Spin up a focused sub-agent that executes a full Bedrock invoke loop with a specific prompt and an optionally filtered tool set.\n\n**REQUIRED WORKFLOW — always follow these steps before calling this tool:**\n1. Call memory_strategy_recall with the task description as the query to search for a matching strategy in memory.\n2. If a strategy is found: extract its _id as memory_id and its payload.tools list as tool_names, then pass both to this tool.\n3. If no strategy is found: call this tool without memory_id and tool_names — the sub-agent will use all available tools.\n\nThis ensures the sub-agent starts with the correct tool set and has access to any pre-built playbook or context stored in that strategy document.\n\nThe sub-agent runs synchronously and returns its final response. Its tool calls route through the same MCP layer as all other tools, so it has full access to any container in the cluster. Memory tools (recall, intake, reflect, etc.) are always included regardless of tool_names.",
+        "inputSchema": {
+          "json": {
+            "type": "object",
+            "properties": {
+              "prompt": {
+                "type": "string",
+                "description": "The instruction or task for the sub-agent to execute."
+              },
+              "context": {
+                "type": ["object", "string"],
+                "description": "Optional structured or text context to pass to the sub-agent alongside the prompt."
+              },
+              "memory_id": {
+                "type": "string",
+                "description": "ObjectId hex of the strategy document returned by memory_strategy_recall. Pass this so the sub-agent can load the strategy's playbook and context. Populate this from the _id field of the top strategy_recall result."
+              },
+              "tool_names": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Tool names to give the sub-agent. Populate from the payload.tools list of the strategy_recall result. Accepts bare names ('vector_search'), dot-notation ('mcpsearch.vector_search'), or prefixed names ('mcpsearch_vector_search'). Memory tools are NOT included, if you need the agent to have memory you must include those tools here. Omit only if no strategy was found."
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session identifier for this sub-agent task. Use the format '{username}:{session_id}:{YYYY-MM-DDTHH:MM}' — including date and time — so memory entries are grouped by user, session, and when the task ran. This is important: you will be able to recall this sub-agent's memories later by querying with this session_id. You MUST provide this — derive it from the current username, session_id, and the current date/time if the caller did not supply one explicitly."
+              },
+              "agent_name": {
+                "type": "string",
+                "description": "A short descriptive name for this sub-agent run, used to label its progress messages in the UI (e.g. 'search_agent', 'batch1', 'summariser'). Choose a name that reflects the task being performed. Required."
+              }
+            },
+            "required": ["prompt", "session_id", "tool_names", "agent_name"]
+          }
+        }
+      }
+    }
+  ]
+}
