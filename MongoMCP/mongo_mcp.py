@@ -9,14 +9,11 @@ import logging
 from pydantic import Field
 import fastmcp
 import mcp.types as mt
-from fastmcp import FastMCP
+from fastmcp.server import FastMCP
 from fastapi import FastAPI, Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastmcp.server.dependencies import AccessToken
 from starlette.responses import JSONResponse
-<<<<<<< HEAD
-from MongoMCP import MongoDBVectorServer, MongoMCPMiddleware, BedrockClient, MongoTokenVerifier
-=======
 from starlette.types import ASGIApp, Receive, Scope, Send
 from AWS_settings import settings
 #from local_settings import settings # change this to use AWS_settings
@@ -24,14 +21,12 @@ from mongomcp import MongoDBQueryServer, MongoMCPMiddleware, ServerBedrockClient
 from mongomcp.mongodb_client import query_capture_cv as _mongo_capture_cv, _query_capture_registry as _mongo_capture_registry, set_query_capture_enabled as _set_query_capture_enabled, _CAPTURE_LISTENER as _mongo_capture_listener
 from mongomcp.agent.prompt_agent import PromptAgent
 from mongomcp.agent.tool_router import ToolRouter
->>>>>>> main
 import traceback
 import os
 import sys
 import time
 import uuid
 
-<<<<<<< HEAD
 USE_LOCAL_MODE = os.getenv('USE_LOCAL_MODE', 'false').lower() == "true"
 
 if USE_LOCAL_MODE:
@@ -42,7 +37,6 @@ else:
     from AWS_settings import settings as settings
 
 logging.basicConfig(level=logging.info)
-=======
 # logs were getting very bloated, lets reduce that a bit.
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
@@ -58,7 +52,6 @@ logging.getLogger("mongomcp.mongo_mcp_middleware").setLevel(logging.INFO)
 logging.getLogger("mongomcp.mongodb_client").setLevel(logging.WARNING)
 logging.getLogger("mongomcp.memory").setLevel(logging.WARNING)
 logging.getLogger("mongomcp.memory.tools").setLevel(logging.WARNING)
->>>>>>> main
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -74,10 +67,7 @@ main component flow:
 
 """
 
-<<<<<<< HEAD
 TOOL_NAME = settings.mcp_tool_name
-=======
->>>>>>> main
 mongo_middleware: MongoMCPMiddleware
 mongo_server: MongoDBQueryServer
 auth_provider = None
@@ -142,42 +132,12 @@ if not _mcp_auth_enabled:
     logger.info("FastMCP auth in non-strict mode (MCP_AUTH_ENABLED=false) — identity parsed from token, validation skipped")
 
 # Create FastMCP server instance with bearer token authentication
-<<<<<<< HEAD
-#mcp = FastMCP("mongodb-vector-server", include_fastmcp_meta=False, auth=auth_provider)
-=======
 # this is the mongo tools from config load.
 llm_client = ServerBedrockClient(settings)
->>>>>>> main
 mcp = FastMCP("mongodb-vector-server", auth=auth_provider)
 mcp.add_middleware(mongo_middleware)
 _query_dispatch = register_query_tools(mcp, mongo_server, llm_client, mongo_middleware.endpoint_tools)
 
-<<<<<<< HEAD
-# ----------------------- BEGIN MCP TOOL DEFINITIONS ----------------------- #
-@mcp.tool()
-async def upsert_document(
-    collection: Annotated[str, Field(description="Name of the MongoDB collection to upsert into.")],
-    filter: Annotated[Dict, Field(description="Filter to find the document to update.")],
-    update: Annotated[Dict, Field(description="Update data for the document.")],
-    token: Annotated[AccessToken, Depends(get_access_token)] = None
-) -> Dict[str, Any]:
-    """Upsert a document in the specified MongoDB collection."""
-    
-    # if it comes in from the mcp tool directly then we have a token object 
-    # otherwise it is a dict from the http endpoint llm_invoke
-    # fastapi and fastmcp handle the dependency injection differently
-    scopes = set()
-    client_id = ""
-    if token is None:
-        token = get_access_token()
-    if isinstance(token, dict):
-        scopes = set(token.get("scope", []))
-        client_id = token.get("agent_key","")            
-    elif token is not None:
-        scopes = set(token.scopes)  
-        client_id = token.client_id        
-=======
->>>>>>> main
 
 # Separate FastMCP instance for the memory layer — keeps memory tools off the main tool catalog.
 _agent_instructions = getattr(settings, "agent_instructions", None)
@@ -639,12 +599,6 @@ async def invoke_llm_old(prompt_name: str, body: Dict[str, Any],
     """
     Invoke LLM with specified prompt and incoming context.
     The prompt is looked from and must exist in the MongoDB tool configuration prompts section.
-<<<<<<< HEAD
-    
-    """     
-    if not "llm:invoke" in token.get("scope", []):
-        logger.error(f'Insufficient scope for invoke_llm: llm:invoke permission required for agent {token["agent_key"]}')
-=======
 
     """
     if "llm:invoke" not in token.get("scope", []):
@@ -652,7 +606,6 @@ async def invoke_llm_old(prompt_name: str, body: Dict[str, Any],
             "Insufficient scope for invoke_llm: llm:invoke permission required for agent %s",
             token.get("agent_key"),
         )
->>>>>>> main
         raise HTTPException(status_code=403, detail="Insufficient scope")
 
     context = body.get("context")
@@ -1023,11 +976,7 @@ def main():
     """
     #mcp.run(transport="sse", host="0.0.0.0", port=8001)
     #mcp.run(transport="sse",  port=8001) # this is for local IDE/Cline integration
-<<<<<<< HEAD
     mcp.run(transport=settings.transport, host=settings.host, port=settings.port) # this is for AWS containers  
-=======
-    mcp.run(transport="http", host="0.0.0.0", port=8000, log_level="warning") # this is for AWS containers
->>>>>>> main
 
 
 if __name__ == "__main__":
