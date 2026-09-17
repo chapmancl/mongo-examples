@@ -8,19 +8,13 @@ from typing import Any, Dict, List, Optional, Annotated
 import logging
 from pydantic import Field
 import fastmcp
-import mcp.types as mt
-from fastmcp.server import FastMCP
+from fastmcp import FastMCP
 from fastapi import FastAPI, Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastmcp.server.dependencies import AccessToken
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
-from AWS_settings import settings
-#from local_settings import settings # change this to use AWS_settings
-from mongomcp import MongoDBQueryServer, MongoMCPMiddleware, ServerBedrockClient, MongoTokenVerifier, register_memory_tools, register_query_tools, get_memory_bedrock_toolspecs, register_agent_tools, get_agent_bedrock_toolspecs, __version__ as MCP_VERSION
-from mongomcp.mongodb_client import query_capture_cv as _mongo_capture_cv, _query_capture_registry as _mongo_capture_registry, set_query_capture_enabled as _set_query_capture_enabled, _CAPTURE_LISTENER as _mongo_capture_listener
-from mongomcp.agent.prompt_agent import PromptAgent
-from mongomcp.agent.tool_router import ToolRouter
+import mcp.types as mt
 import traceback
 import os
 import sys
@@ -31,10 +25,16 @@ USE_LOCAL_MODE = os.getenv('USE_LOCAL_MODE', 'false').lower() == "true"
 
 if USE_LOCAL_MODE:
     # Start with : > fastapi run mongo_mcp.py --port 8001
-    from local_settings import local_settings as settings
+    print("# ------ Running in local mode ------ #")
+    from local_settings import settings
 else:
     # Running with kubernetes in EKS/Fargate
-    from AWS_settings import settings as settings
+    from AWS_settings import settings
+
+from mongomcp import MongoDBQueryServer, MongoMCPMiddleware, ServerBedrockClient, MongoTokenVerifier, register_memory_tools, register_query_tools, get_memory_bedrock_toolspecs, register_agent_tools, get_agent_bedrock_toolspecs, __version__ as MCP_VERSION
+from mongomcp.mongodb_client import query_capture_cv as _mongo_capture_cv, _query_capture_registry as _mongo_capture_registry, set_query_capture_enabled as _set_query_capture_enabled, _CAPTURE_LISTENER as _mongo_capture_listener
+from mongomcp.agent.prompt_agent import PromptAgent
+from mongomcp.agent.tool_router import ToolRouter
 
 logging.basicConfig(level=logging.info)
 # logs were getting very bloated, lets reduce that a bit.
@@ -664,7 +664,7 @@ async def invoke_llm_old(prompt_name: str, body: Dict[str, Any],
             # accepts a per-call tool callback parameter.
             llm_client.mcp_call = scoped_mcp_call
 
-            resp_obj = await llm_client.invoke_bedrock_with_tools(
+            resp_obj = await llm_client.invoke_client_with_tools(
                 prompt=prompt,
                 context=json.dumps(context),
             )

@@ -118,6 +118,10 @@ def _load_settings(use_aws: bool):
 		from AWS_settings import settings
 	else:
 		from local_settings import settings
+		print("Using local_settings")
+
+	if settings.mcp_config_db:
+		MEMORY_DB_NAME = settings.mcp_config_db
 	return settings
 
 
@@ -132,9 +136,7 @@ def _get_settings_mongo_url(settings) -> str:
 
 def create_mcp_config_collections(settings) -> None:
 	"""Create mcp_config database collections if they do not already exist."""
-	settings.mcp_config_db = "mcp_config"
-	settings.mcp_config_col = "mcp_tools"
-
+	
 	mongo_client = MongoDBClient(settings=settings)
 	mongo_client.sync_connect_to_mongodb()
 
@@ -142,7 +144,7 @@ def create_mcp_config_collections(settings) -> None:
 	required_collections = ["agent_identities", "mcp_cache", "mcp_tools", "mcp_patterns", "llm_history"] + MEMORY_COLLECTIONS
 	existing_collections = set(db.list_collection_names())
 
-	print("Connected to database: mcp_config")
+	print(f"Connected to database: {settings.mcp_config_db}")
 	for collection_name in required_collections:
 		if collection_name in existing_collections:
 			print(f"Collection already exists: {collection_name}")
@@ -437,7 +439,7 @@ def main() -> None:
 		help="Use AWS_settings.py credentials instead of local_settings.py",
 	)
 	args = parser.parse_args()
-
+	print(f"args: {args}")
 	run_setup(
 		seed_agent_identity=args.seed_agent_identity,
 		agent_name=args.agent_name,
@@ -447,4 +449,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+	# INvoke: python3 mongosetup.py --aws
 	main()

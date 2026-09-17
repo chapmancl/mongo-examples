@@ -1,4 +1,5 @@
 import os
+import sys
 import logging
 import time
 from flask import Flask, send_from_directory, request, jsonify, abort, Response
@@ -12,16 +13,24 @@ from typing import Optional, List, Any, Dict
 import threading
 import json
 import queue
+base_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(os.path.dirname(base_dir))
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("mcp.client.streamable_http").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
-
+USE_LOCAL_MODE = os.getenv('USE_LOCAL_MODE', 'false').lower() == "true"
 # Import settings to check SAVE_LLM_HISTORY flag
-try:
-    from aws_settings import settings
-except ImportError:
+if USE_LOCAL_MODE:
+    print("# ------ Using local_settings.py ------ #")
     from local_settings import settings
+else:
+    # Running with kubernetes in EKS/Fargate
+    try:
+        from AWS_settings import settings
+    except ImportError:
+        print("# ------ ERROR, no settings file ----- #")
+        sys.exit(1)
 
 mimetypes.add_type('application/javascript', '.js')
 

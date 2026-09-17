@@ -31,7 +31,7 @@ class QueryProcessor:
             region_name=settings.aws_region
         )
 
-    def invoke_bedrock_with_tools(self, prompt: str, max_iterations=5) -> str:
+    def invoke_client_with_tools(self, prompt: str, max_iterations=5) -> str:
         """
         Invoke Bedrock with MCP tools support, handling tool calls iteratively
 
@@ -140,7 +140,7 @@ class QueryProcessor:
                 else:
                     return f"Error: {error.response['Error']['Message']}"
             except Exception as e:
-                print(f"Unexpected error in invoke_bedrock_with_tools: {e}")
+                print(f"Unexpected error in invoke_client_with_tools: {e}")
                 return f"Error: {str(e)}"
 
         self.history = messages
@@ -304,7 +304,7 @@ class QueryProcessor:
             self.history = []
 
         # Invoke Bedrock with MCP tools
-        assistant_message = self.invoke_bedrock_with_tools(question)
+        assistant_message = self.invoke_client_with_tools(question)
         return assistant_message, self.history
 
     def run(self) -> None:

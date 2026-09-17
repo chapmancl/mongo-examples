@@ -1,3 +1,5 @@
+import sys
+import os
 import asyncio
 import json
 import queue
@@ -10,13 +12,25 @@ import mcp.types as mt
 import requests
 from pydantic import BaseModel
 
-from aws_settings import settings
+base_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(os.path.dirname(base_dir))
 from mongomcp.agent.cache_utils import create_cache_key as _create_cache_key
 from mongomcp.mongo_cache import MongoSessionCache
 from mongomcp.agent.tool_router import ToolRouter
 from mongomcp.agent.webui_bedrock_client import WebUiBedrockClient
 
 import logging
+
+USE_LOCAL_MODE = os.getenv('USE_LOCAL_MODE', 'false').lower() == "true"
+
+if USE_LOCAL_MODE:
+    # Start with : > fastapi run mongo_mcp.py --port 8001
+    print("# ------ Running in local mode ------ #")
+    from local_settings import settings
+else:
+    # Running with kubernetes in EKS/Fargate
+    from AWS_settings import settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -551,7 +565,7 @@ class APIQueryProcessor:
                 effective_system.append({"text": _ctx_block})
             self.llm_client.system = effective_system
             self.llm_client.configure_tools(self.mcp_tools_config, self._call_mcp_tool)
-            return await self.llm_client.invoke_bedrock_with_tools_text(messages=msgs)
+            return await self.llm_client.invoke_client_with_tools_text(messages=msgs)
 
         result = asyncio.run(_invoke())
         if self._looks_like_no_tools_error(result):

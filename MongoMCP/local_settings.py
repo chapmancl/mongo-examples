@@ -28,7 +28,7 @@ class LocalSettings:
         self.transport = os.getenv('MCP_TRANSPORT', 'http')
         self.host = os.getenv('SERVER_HOST', '0.0.0.0')
         self.port = int(os.getenv('SERVER_PORT', '8000'))
-
+        self.webui_port = int(os.getenv('WEBUI_PORT', '8001'))
         self.aws_region = os.getenv('AWS_REGION', 'us-east-1')
 
         # Name of the MCP tool group served by this instance (matches mcp_tools collection key)
@@ -37,6 +37,14 @@ class LocalSettings:
 
         self.IS_LOCAL = json.loads(os.getenv('IS_LOCAL', 'true').lower())
 
+        # LLM model — Bedrock cross-region inference profile ID
+        self.LLM_PROVIDER = os.getenv('LLM_PROVIDER', 'bedrock').lower()
+        self.LLM_ENDPOINT = os.getenv('LLM_ENDPOINT', 'https://bedrock-runtime.us-east-1.amazonaws.com')
+        self.LLM_PROVIDER_API_KEY = os.getenv('LLM_PROVIDER_API_KEY', '')
+        self.LLM_MODEL_ID = os.getenv('LLM_MODEL_ID', 'global.anthropic.claude-sonnet-4-6')
+        self.LLM_MAX_ITERATIONS = int(os.getenv('LLM_MAX_ITERATIONS', '15'))
+        self.ENABLE_CACHE_POINTS = os.getenv('ENABLE_CACHE_POINTS', 'true').lower() in ['1', 'true', 'yes', 'on']
+        self.ENABLE_BEDROCK_CACHING = True
         # Embedding model
         self.EMBEDDING_MODEL_ID = "voyage-4"
         self.QUERY_EMBEDDING_MODEL_ID = os.getenv(
@@ -52,25 +60,50 @@ class LocalSettings:
         self.mcp_config_col = "mcp_tools"
         self.memory_db = os.getenv('MEMORY_DB', 'mcp_config')
 
-        # LLM model — Bedrock cross-region inference profile ID
-        self.LLM_MODEL_ID = os.getenv('LLM_MODEL_ID', 'global.anthropic.claude-sonnet-4-6')
-        self.LLM_MAX_ITERATIONS = int(os.getenv('LLM_MAX_ITERATIONS', '15'))
-
-        self.ENABLE_CACHE_POINTS = os.getenv('ENABLE_CACHE_POINTS', 'true').lower() in ['1', 'true', 'yes', 'on']
-        self.ENABLE_BEDROCK_CACHING = True
 
         # Static auth token for the MCP server (generate via the MCP server's token endpoint)
         self.AUTH_TOKEN = os.getenv('MCP_AUTH_TOKEN', 'your-static-jwt-token-here')
 
         self.agent_instructions = _MEMORY_AGENT_INSTRUCTIONS
 
+        # -------------- For WEBUI ---------------------- #
+        self._cognito = None
+        self.ENABLE_BEDROCK_CACHING = True
+        self.ENABLE_MCP_TOOL_CACHING = False
+        self.ENABLE_RESPONSE_CACHING = False
+        self.CACHE_TTL = 300
+        self.CACHE_NAMESPACE = os.getenv('CACHE_NAMESPACE', 'local')  # Isolates cache from AWS builds
+        self.AI_TOOL_ROUTING = False
+        self.TOOL_ROUTING = False
+        self.mongo_mcp_root = os.getenv('MONGO_MCP_ROOT', 'http://localhost:8000')
+
+        # Save LLM conversation history to MongoDB llm_history collection
+        self.SAVE_LLM_HISTORY = os.getenv('SAVE_LLM_HISTORY', 'true').lower() in ['1', 'true', 'yes', 'on']
+
+        self.BEDROCK_SYSTEM_PROMPT_TEXTS = [
+            "***IMPORTANT: DO NOT recall sessions by username until you have confirmed the username with the user. DO NOT ASSUME you know the Username. Default username is demo-user",
+            "***IMPORTANT: STRATEGY FIRST: Before any tool call execute memory_strategy_recall to find applicable patterns THEN EXECUTE the found pattern. Validated and high scoring patterns CANNOT be ignored.***",
+            "***IMPORTANT: All output should be Markdown formatted for display within a div in an existing webpage. Do not include html, head, or body tags. Only include the inner content. Always use Markdown formatting.",
+        ]
+
+        # Static auth token for the MCP server
+        self.AUTH_TOKEN = os.getenv('MCP_AUTH_TOKEN', 'your-static-jwt-token-here')
+
+        # ----------- END WEBUI Specific --------------- #
+
         # Hardcoded MongoDB credentials for local development — replace with your Atlas cluster details
         self._credentials: Dict[str, str] = {
-            "username": "your-mongo-username",
-            "password": "your-mongo-password",
-            "mongoUrl": "your-cluster.mongodb.net"
+            "username": os.getenv('MONGO_USERNAME', 'mongo_username'),
+            "password": os.getenv('MONGO_PASSWORD', 'password'),
+            "mongoUrl": os.getenv('MONGO_URI', 'uri')
         }
-
+    
+    def get_auth_token(self) -> str:
+        """Return a Cognito JWT if configured, otherwise fall back to the static AUTH_TOKEN."""
+        if self._cognito is not None:
+            return self._cognito.get_token()
+        return self.AUTH_TOKEN
+    
     def get_mongo_credentials(self) -> Dict[str, str]:
         return self._credentials
 

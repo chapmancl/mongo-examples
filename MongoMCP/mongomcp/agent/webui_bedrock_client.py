@@ -45,15 +45,15 @@ class WebUiBedrockClient(BedrockClient):
             "messages": request_messages,
         }
 
-    async def invoke_bedrock_with_tools(
+    async def invoke_client_with_tools(
         self,
         prompt: Optional[str] = None,
         context: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """WebUiBedrockClient override: formats the request then delegates to
-        BedrockClient.invoke_bedrock_with_tools() (base class) via super().
-        Returns the raw response dict — call invoke_bedrock_with_tools_text() instead
+        BedrockClient.invoke_client_with_tools() (base class) via super().
+        Returns the raw response dict — call invoke_client_with_tools_text() instead
         if you want the normalized {response_text, jsondata, history} payload.
         """
         request = self._format_invoke_request(
@@ -61,18 +61,18 @@ class WebUiBedrockClient(BedrockClient):
             context=context,
             messages=messages,
         )
-        return await super().invoke_bedrock_with_tools(  # BedrockClient (base class)
+        return await super().invoke_client_with_tools(  # BedrockClient (base class)
             request=request,
         )
 
-    async def invoke_bedrock_with_tools_text(
+    async def invoke_client_with_tools_text(
         self,
         prompt: Optional[str] = None,
         context: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """Invoke Bedrock and return a normalized {response_text, jsondata, history} dict."""
-        raw = await self.invoke_bedrock_with_tools(
+        raw = await self.invoke_client_with_tools(
             prompt=prompt,
             context=context,
             messages=messages,

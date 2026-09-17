@@ -9,6 +9,7 @@ import re
 import asyncio
 import time
 import traceback
+import voyageai
 from typing import Any, Callable, Dict, List, Optional
 import logging
 import httpx
@@ -35,15 +36,34 @@ class BedrockClient:
     """
     def __init__(self, settings):
         self.settings = settings
-        self.bedrock_client = boto3.client(
-            'bedrock-runtime',
-            region_name=self.settings.aws_region,
-            config=BotoConfig(
-                read_timeout=120,       # seconds to wait for a response chunk
-                connect_timeout=10,     # seconds to establish connection
-                retries={"max_attempts": 2, "mode": "adaptive"},
-            ),
-        )
+        self.voyage_client = None
+        self.embedding_model_id =  getattr(self.settings, "EMBEDDING_MODEL_ID", "openai-text-embedding-3-small-v1")
+        provider = getattr(self.settings, "LLM_PROVIDER", "bedrock").lower()
+        if provider == "grove":
+            from .grove_converse import GroveConverseClient            
+            self.converse_client = GroveConverseClient.from_settings(self.settings)
+            # LibertyAIR's Bedrock route does not support cache points.
+            self.enable_cache_points = False
+            logger.info("LLM provider: Grove (model=%s)", self.settings.LLM_MODEL_ID)
+        else:
+            self.bedrock_client = boto3.client(
+                        'bedrock-runtime',
+                        region_name=self.settings.aws_region,
+                        config=BotoConfig(
+                            read_timeout=120,       # seconds to wait for a response chunk
+                            connect_timeout=10,     # seconds to establish connection
+                            retries={"max_attempts": 2, "mode": "adaptive"},
+                        ),
+                    )
+            self.converse_client = self.bedrock_client
+            self.enable_cache_points = getattr(self.settings, "ENABLE_CACHE_POINTS", True)
+            logger.info("LLM provider: direct Bedrock (model=%s)", self.settings.LLM_MODEL_ID)
+        if self.embedding_model_id.startswith("voyage"):
+            api_key = self.settings.mongo_voyage_apikey()
+            self.voyage_client = voyageai.Client(api_key=api_key)
+            logger.info("Embedding provider: Voyage (model=%s)", self.embedding_model_id)
+        else:
+            logger.info("Embedding provider: Bedrock (model=%s)", self.embedding_model_id)
         self.mcp_tools = None
         self.mcp_call = None
         self.llm_setup = False
@@ -215,7 +235,7 @@ class BedrockClient:
             return None
         return None
 
-    async def invoke_bedrock_text(self, prompt: str, system: Optional[str] = None) -> str:
+    async def invoke_converse_text(self, prompt: str, system: Optional[str] = None) -> str:
         """Plain text invocation with no tool config — single user turn, returns the assistant text.
 
         Useful for lightweight tasks (e.g. tool routing, summarisation) that do not need
@@ -234,20 +254,20 @@ class BedrockClient:
             "messages": [{"role": "user", "content": [{"text": prompt}]}],
         }
         try:
-            response = await asyncio.to_thread(self.bedrock_client.converse, **converse_input)
+            response = await asyncio.to_thread(self.converse_client.converse, **converse_input)
             text = ""
             for block in response.get("output", {}).get("message", {}).get("content", []):
                 if "text" in block:
                     text += block["text"]
             return text
         except Exception as e:
-            logger.warning(f"invoke_bedrock_text failed: {e}")
+            logger.warning(f"invoke_converse_text failed: {e}")
             return ""
 
     # Keep this method as the core Bedrock execution path.
     # It accepts a unified request payload so each subclass can own
     # prompt/context/history formatting for its own call surface.
-    async def invoke_bedrock_with_tools(
+    async def invoke_client_with_tools(
         self,
         request: Dict[str, Any],
     ) -> Dict[str, Any]:
@@ -339,7 +359,7 @@ class BedrockClient:
                         }]
                     })
 
-                self._emit_progress(self.message_handler, f"Invoking Bedrock (iteration {iteration + 1})", status="LLM Thinking...")
+                self._emit_progress(self.message_handler, f"Invoking Client (iteration {iteration + 1})", status="LLM Thinking...")
 
                 # Invoke Bedrock using the Converse API
                 converse_input = {
@@ -351,10 +371,10 @@ class BedrockClient:
                     converse_input["system"] = self.system
                 else:
                     if iteration == 0:
-                        logger.warning("invoke_bedrock_with_tools: NO system prompt set on this client")
+                        logger.warning("invoke_client_with_tools: NO system prompt set on this client")
 
                 t0 = time.monotonic()
-                response = self.bedrock_client.converse(**converse_input)
+                response = self.converse_client.converse(**converse_input)
                 elapsed_ms = (time.monotonic() - t0) * 1000
                 self._emit_progress(
                     self.message_handler,
@@ -573,12 +593,12 @@ class BedrockClient:
                     return_obj["error"] = error.response['Error']['Message']
                 return return_obj
             except Exception as e:
-                logger.error(f"Unexpected error in invoke_bedrock_with_tools: {e}")
+                logger.error(f"Unexpected error in invoke_client_with_tools: {e}")
                 return_obj["error"] = str(e)
                 return return_obj
 
         # If max iterations reached without completion
-        logger.error(f"invoke_bedrock_with_tools reached maximum iterations: {self.max_iterations}")
+        logger.error(f"invoke_client_with_tools reached maximum iterations: {self.max_iterations}")
         return_obj["error"] = f"Maximum iterations ({self.max_iterations}) reached without completion"
         return return_obj
 
@@ -723,7 +743,7 @@ class BedrockClient:
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(
             None,
-            lambda: self.bedrock_client.invoke_model(
+            lambda: self.converse_client.invoke_model(
                 modelId=model_id,
                 contentType="application/json",
                 accept="application/json",
@@ -960,7 +980,7 @@ class ServerBedrockClient(BedrockClient):
             "messages": request_messages,
         }
 
-    async def invoke_bedrock_with_tools(
+    async def invoke_client_with_tools(
         self,
         prompt: Optional[str] = None,
         context: Optional[str] = None,
@@ -971,6 +991,6 @@ class ServerBedrockClient(BedrockClient):
             context=context,
             messages=messages,
         )
-        return await super().invoke_bedrock_with_tools(
+        return await super().invoke_client_with_tools(
             request=request,
         )

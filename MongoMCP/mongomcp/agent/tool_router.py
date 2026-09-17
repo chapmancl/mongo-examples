@@ -283,7 +283,7 @@ class ToolRouter:
             f"Question: {question}"
         )
         try:
-            response_text = await self.llm_client.invoke_bedrock_text(user_text)
+            response_text = await self.llm_client.invoke_converse_text(user_text)
         except Exception as e:
             logger.warning(f"ToolRouter LLM call failed: {e}")
             # Return full catalog (including memory) on error
@@ -530,7 +530,7 @@ class ToolRouter:
             )
 
             self.message_handler("Generating PII-free playbook from interaction...", status="Strategy Store")
-            playbook = await self.llm_client.invoke_bedrock_text(prompt)
+            playbook = await self.llm_client.invoke_converse_text(prompt)
 
             if not playbook or len(playbook) < 50:
                 logger.warning("LLM returned empty/short playbook, skipping save")

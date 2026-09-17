@@ -678,9 +678,9 @@ class CachedQueryProcessor:
           2. Discover/cache MCP tools (generate_toolconfig)
           3. Invoke Bedrock via Converse API, keeping MCP session open for tool callbacks
              → _invoke (inline coroutine, resets Motor connections, opens MCP session if present)
-               → llm_client.invoke_bedrock_with_tools_text  (WebUiBedrockClient)
-                 → WebUiBedrockClient.invoke_bedrock_with_tools  (formats request)
-                   → BedrockClient.invoke_bedrock_with_tools     (base class, actual API call)
+               → llm_client.invoke_client_with_tools_text  (WebUiBedrockClient)
+                 → WebUiBedrockClient.invoke_client_with_tools  (formats request)
+                   → BedrockClient.invoke_client_with_tools     (base class, actual API call)
                → normalize_bedrock_response (WebUiBedrockClient, splits text / jsondata)
           4. Return (answer, jsondata, history)
 
@@ -787,7 +787,7 @@ class CachedQueryProcessor:
             # open/close their own sessions on each call, so we do NOT need the
             # top-level self.mcp_client context manager here.  Opening it would
             # create sessions to every endpoint and the close can hang.
-            result = await self.llm_client.invoke_bedrock_with_tools_text(messages=msgs)
+            result = await self.llm_client.invoke_client_with_tools_text(messages=msgs)
 
             # If the pattern cache routed to the wrong tool and all tool results
             # came back empty, retry using LLM routing so it can pick the right tool.
@@ -818,7 +818,7 @@ class CachedQueryProcessor:
                         self.mcp_tools_config, self._execute_mcp_tool_cached_async
                     )
                 self._tool_response_cache.reset_connection()
-                result = await self.llm_client.invoke_bedrock_with_tools_text(messages=msgs)
+                result = await self.llm_client.invoke_client_with_tools_text(messages=msgs)
 
             # Record a PII-free playbook for LLM-routed interactions (non-fatal).
             # Only fires when LLM routing set a pattern; cache hits already have a playbook.

@@ -237,7 +237,7 @@ class PromptAgent:
         # --- 4. Invoke ---
         output: Dict[str, Any] = {"prompt": prompt}
         try:
-            result = await client.invoke_bedrock_with_tools_text(
+            result = await client.invoke_client_with_tools_text(
                 prompt=full_prompt,
                 context=context_str,
             )

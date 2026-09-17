@@ -10,12 +10,11 @@
 #   use>  aws sso login
 
 #"gunicorn", "-w", "2", "-k", "gthread", "--threads", "4", "-b", "0.0.0.0:8001", "app:app", "--timeout", "300", "--log-level", "warning"]
-#gunicorn -w 2" -k gthread --threads 4 -b" 0.0.0.0:8000", "app:app", "--timeout", "300", "--log-level", "warning"
 
 set -e  # Exit on error
 
 echo "=========================================="
-echo "MongoDB MCP Server - Local Mode"
+echo "MongoDB AI-WebUI Server - Local Mode"
 echo "=========================================="
 
 # Check if .env.local exists
@@ -54,48 +53,13 @@ echo ""
 
 # Parse command line arguments
 HOST="${SERVER_HOST:-0.0.0.0}"
-PORT="${SERVER_PORT:-8000}"
-TRANSPORT="http"
-
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --host)
-            HOST="$2"
-            shift 2
-            ;;
-        --port)
-            PORT="$2"
-            shift 2
-            ;;
-        --sse)
-            TRANSPORT="sse"
-            shift
-            ;;
-        --help)
-            echo "Usage: $0 [OPTIONS]"
-            echo ""
-            echo "Options:"
-            echo "  --host HOST      Host to bind to (default: 0.0.0.0)"
-            echo "  --port PORT      Port to bind to (default: 8000)"
-            echo "  --sse            Use SSE transport instead of HTTP"
-            echo "  --help           Show this help message"
-            echo ""
-            echo "Environment variables are loaded from .env.local"
-            exit 0
-            ;;
-        *)
-            echo "Unknown option: $1"
-            echo "Use --help for usage information"
-            exit 1
-            ;;
-    esac
-done
+PORT="${WEBUI_PORT:-8001}"
+UIDIR="webui"
 
 # Start the server
-echo "Starting MongoDB MCP Server..."
+echo "Starting MongoDB WEBUI Server..."
 echo "Host: $HOST"
 echo "Port: $PORT"
-echo "Transport: $TRANSPORT"
 echo "=========================================="
 echo ""
 
@@ -104,9 +68,8 @@ echo ""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export PYTHONPATH="${SCRIPT_DIR}/MongoMCP:${PYTHONPATH}"
 
-if [ "$TRANSPORT" = "sse" ]; then
-    fastapi run mongo_mcp.py --port $PORT
-else
-    fastapi run mongo_mcp.py --port $PORT
-fi
+#gunicorn -w 2" -k gthread --threads 4 -b" 0.0.0.0:8000", "app:app", "--timeout", "300", "--log-level", "warning"
+cd $UIDIR
+gunicorn -w 2 -k gthread --threads 4 -b $HOST:$PORT app:app --timeout 300 --log-level warning
+
 

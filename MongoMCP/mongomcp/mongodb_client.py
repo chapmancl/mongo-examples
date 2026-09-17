@@ -184,7 +184,7 @@ class MongoDBClient:
 
     async def ensure_connection(self):
         """Ensure MongoDB connection is established"""
-        logger.debug(f"connecting to mongodb {self._db_name} {self._collection_name}")
+        logger.info(f"connecting to mongodb {self._db_name} {self._collection_name}")
         ping_result = {}
         if not self._connection_initialized:
             ping_result = await self.connect_to_mongodb()
@@ -219,7 +219,7 @@ class MongoDBClient:
 
         except Exception as e:
             ip_address = self.get_current_ip()
-            logger.error(f"Failed to connect to MongoDB from ip: {ip_address}: {e}")
+            raise ConnectionError(f"Failed to connect to MongoDB from ip: {ip_address} - {self.get_mongo_uri()}: \r\n{e}")
             self._connection_initialized = False
         return ping_result
 
@@ -233,7 +233,7 @@ class MongoDBClient:
         except Exception as e:
             ip_address = self.get_current_ip()
             self._connection_initialized = False
-            raise ConnectionError(f"Failed to connect to MongoDB from ip: {ip_address}: \r\n{e}")
+            raise ConnectionError(f"Failed to connect to MongoDB from ip: {ip_address} - {self.get_mongo_uri()}: \r\n{e}")
         return self._connection_initialized
 
     def _set_locals(self):
