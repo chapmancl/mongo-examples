@@ -18,44 +18,7 @@ echo "=========================================="
 echo "MongoDB MCP Server - Local Mode"
 echo "=========================================="
 
-# Check if .env.local exists
-if [ ! -f ".env.local" ]; then
-    echo "ERROR: .env.local file not found!"
-    echo ""
-    echo "Please create .env.local from the template:"
-    echo "  cp .env.local.example .env.local"
-    echo ""
-    echo "Then edit .env.local with your MongoDB credentials and configuration."
-    exit 1
-fi
-
-# Load environment variables from .env.local
-echo "Loading environment variables from .env.local..."
-echo export $(grep -v '^#' .env.local | grep -v '^$' | xargs)
-export $(grep -v '^#' .env.local | grep -v '^$' | xargs)
-
-# Verify required environment variables
-if [ -z "$MCP_TOOL_NAME" ]; then
-    echo "ERROR: MCP_TOOL_NAME is not set in .env.local"
-    exit 1
-fi
-
-if [ -z "$MONGO_CONNECTION_STRING" ] && { [ -z "$MONGO_USERNAME" ] || [ -z "$MONGO_PASSWORD" ] || [ -z "$MONGO_URI" ]; }; then
-    echo "ERROR: MongoDB credentials not configured in .env.local"
-    echo "Please set either MONGO_CONNECTION_STRING or (MONGO_USERNAME, MONGO_PASSWORD, MONGO_URI)"
-    exit 1
-fi
-
-echo "Configuration loaded successfully!"
-echo "Tool Name: $MCP_TOOL_NAME"
-echo "Config DB: ${MCP_CONFIG_DB:-mcp_config}"
-echo "Config Collection: ${MCP_CONFIG_COL:-mcp_tools}"
-echo ""
-
-# Parse command line arguments
-HOST="${SERVER_HOST:-0.0.0.0}"
-PORT="${SERVER_PORT:-8000}"
-TRANSPORT="http"
+ENV_FILE=".env.local"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -70,6 +33,10 @@ while [[ $# -gt 0 ]]; do
         --sse)
             TRANSPORT="sse"
             shift
+            ;;
+        --env-file)
+            ENV_FILE="$2"
+            shift 2
             ;;
         --help)
             echo "Usage: $0 [OPTIONS]"
@@ -90,6 +57,45 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Check if .env.local exists
+if [ ! -f "$ENV_FILE" ]; then
+    echo "ERROR: $ENV_FILE file not found!"
+    echo ""
+    echo "Please create .env.local from the template:"
+    echo "  cp .env.local.example .env.local"
+    echo ""
+    echo "Then edit .env.local with your MongoDB credentials and configuration."
+    exit 1
+fi
+
+# Load environment variables from .env.local
+echo "Loading environment variables from $ENV_FILE..."
+echo export $(grep -v '^#' $ENV_FILE | grep -v '^$' | xargs)
+export $(grep -v '^#' $ENV_FILE | grep -v '^$' | xargs)
+
+# Verify required environment variables
+if [ -z "$MCP_TOOL_NAME" ]; then
+    echo "ERROR: MCP_TOOL_NAME is not set in $ENV_FILE"
+    exit 1
+fi
+
+if [ -z "$MONGO_CONNECTION_STRING" ] && { [ -z "$MONGO_USERNAME" ] || [ -z "$MONGO_PASSWORD" ] || [ -z "$MONGO_URI" ]; }; then
+    echo "ERROR: MongoDB credentials not configured in $ENV_FILE"
+    echo "Please set either MONGO_CONNECTION_STRING or (MONGO_USERNAME, MONGO_PASSWORD, MONGO_URI)"
+    exit 1
+fi
+
+echo "Configuration loaded successfully!"
+echo "Tool Name: $MCP_TOOL_NAME"
+echo "Config DB: ${MCP_CONFIG_DB:-mcp_config}"
+echo "Config Collection: ${MCP_CONFIG_COL:-mcp_tools}"
+echo ""
+
+# Parse command line arguments
+HOST="${SERVER_HOST:-0.0.0.0}"
+PORT="${SERVER_PORT:-8000}"
+TRANSPORT="http"
 
 # Start the server
 echo "Starting MongoDB MCP Server..."

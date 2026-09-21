@@ -8,7 +8,6 @@ import traceback
 from typing import Any, List, Optional
 
 import fastmcp
-import mcp.types as mt
 import requests
 from pydantic import BaseModel
 
@@ -403,16 +402,9 @@ class APIQueryProcessor:
 
         async def _run():
             async with client:
-                raw = await client.session.send_request(
-                    mt.ClientRequest(
-                        mt.CallToolRequest(
-                            params=mt.CallToolRequestParams(
-                                name=endpoint_tool_name,
-                                arguments=tool_input,
-                            )
-                        )
-                    ),
-                    mt.CallToolResult,
+                raw = await client.call_tool_mcp(
+                    name=endpoint_tool_name,
+                    arguments=tool_input,
                 )
                 if raw.content and hasattr(raw.content[0], "text"):
                     return raw.content[0].text
