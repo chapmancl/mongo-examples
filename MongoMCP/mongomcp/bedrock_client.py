@@ -17,6 +17,7 @@ import httpx
 import boto3
 from botocore.config import Config as BotoConfig
 from botocore.exceptions import ClientError
+from bson import ObjectId
 from bson.binary import Binary, BinaryVectorDtype
 
 # Configure logging
@@ -67,6 +68,8 @@ class DateTimeEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, datetime.datetime):
             return obj.isoformat()  
+        if isinstance(obj, ObjectId):
+            return str(obj)
         return json.JSONEncoder.default(self, obj)
 
 
@@ -76,8 +79,7 @@ class BedrockClient:
     Handles the LLM interactions and tool integrations for the LLM.
     """
     def __init__(self, settings):
-        self.settings = settings
-        self.voyage_client = None
+        self.settings = settings        
         self.embedding_model_id =  getattr(self.settings, "EMBEDDING_MODEL_ID", "openai-text-embedding-3-small-v1")
         provider = getattr(self.settings, "LLM_PROVIDER", "bedrock").lower()
         if provider == "grove":
@@ -99,18 +101,12 @@ class BedrockClient:
             self.converse_client = self.bedrock_client
             self.enable_cache_points = getattr(self.settings, "ENABLE_CACHE_POINTS", True)
             logger.info("LLM provider: direct Bedrock (model=%s)", self.settings.LLM_MODEL_ID)
-        if self.embedding_model_id.startswith("voyage"):
-            api_key = self.settings.mongo_voyage_apikey()
-            self.voyage_client = voyageai.Client(api_key=api_key)
-            logger.info("Embedding provider: Voyage (model=%s)", self.embedding_model_id)
-        else:
-            logger.info("Embedding provider: Bedrock (model=%s)", self.embedding_model_id)
         self.mcp_tools = None
         self.mcp_call = None
         self.llm_setup = False
         # Invoke behavior is configured on the client instance, not per call.
         self.max_iterations = self.settings.LLM_MAX_ITERATIONS
-        self.enable_cache_points = getattr(self.settings, "ENABLE_CACHE_POINTS", True)
+        self.enable_cache_points = provider != "grove" and getattr(self.settings, "ENABLE_CACHE_POINTS", True)
         self.max_cache_points = 4 # Bedrock has a max of cache points per conversation this was 4, but we can adjust if needed.
         self.system = None
         self.message_handler = None

@@ -119,13 +119,27 @@ def _convert_tools(tool_config: Dict[str, Any]) -> List[Dict[str, Any]]:
     return tools
 
 
-def _extract_system(system: List[Dict[str, Any]]) -> str:
-    """Join Bedrock system content text blocks into a single system string."""
+def _extract_system(system: List[Dict[str, Any]]) -> Any:
+    """Keep cache boundaries between stable and changing system instructions."""
     parts = []
-    for block in _strip_cache_points(system):
-        if isinstance(block, dict) and "text" in block:
-            parts.append(block["text"])
-    return "\n".join(parts)
+    pending = []
+    for block in system:
+        if not isinstance(block, dict):
+            continue
+        if "text" in block:
+            pending.append(block["text"])
+        elif "cachePoint" in block and pending:
+            parts.append({
+                "type": "text",
+                "text": "\n".join(pending),
+                "cache_control": {"type": "ephemeral"},
+            })
+            pending = []
+    if not parts:
+        return "\n".join(pending)
+    if pending:
+        parts.append({"type": "text", "text": "\n".join(pending)})
+    return parts
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +194,9 @@ def _anthropic_to_bedrock_response(data: Dict[str, Any]) -> Dict[str, Any]:
     ]
 
     anthropic_usage = data.get("usage", {})
-    input_tokens = anthropic_usage.get("input_tokens", 0)
+    cache_read = anthropic_usage.get("cache_read_input_tokens", 0)
+    cache_write = anthropic_usage.get("cache_creation_input_tokens", 0)
+    input_tokens = anthropic_usage.get("input_tokens", 0) + cache_read + cache_write
     output_tokens = anthropic_usage.get("output_tokens", 0)
 
     return {
@@ -195,6 +211,8 @@ def _anthropic_to_bedrock_response(data: Dict[str, Any]) -> Dict[str, Any]:
             "inputTokens": input_tokens,
             "outputTokens": output_tokens,
             "totalTokens": input_tokens + output_tokens,
+            "cacheReadInputTokens": cache_read,
+            "cacheWriteInputTokens": cache_write,
         },
     }
 

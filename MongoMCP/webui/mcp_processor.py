@@ -703,6 +703,7 @@ class APIQueryProcessor:
             "memory_recall",
             "memory_reflect",
             "memory_list_sessions",
+            "agent_run_prompt",
         }:
             current_username = getattr(self, "_current_username", None)
             if current_username:
@@ -801,7 +802,7 @@ class APIQueryProcessor:
         # retry sleeps / wait_for wrapping. Total is the webui-side wall clock.
         _total_ms = int((time.monotonic() - _t_total) * 1000)
         _overhead_ms = max(0, _total_ms - max(0, _timing["open_ms"]) - max(0, _timing["send_ms"]))
-        logger.info(
+        logger.debug(
             "MCP timing %s -> endpoint=%s: total=%d ms | session_open=%d ms (setup/transport) | "
             "send_request=%d ms (call round-trip + server) | overhead/retry=%d ms",
             toolname, endpoint_name, _total_ms, _timing["open_ms"], _timing["send_ms"], _overhead_ms,
@@ -975,6 +976,8 @@ class APIQueryProcessor:
                 _ctx_prefetched = True
 
             effective_system = list(self._base_system_prompt)
+            if effective_system and getattr(self.llm_client.settings, "LLM_PROVIDER", "bedrock").lower() == "grove":
+                effective_system.append({"cachePoint": {"type": "default"}})
             # Always disambiguate the USER identity from the app's service token so the
             # agent never treats a verified user as the machine service credential.
             _uname = request.username or request.user_id or "unknown"

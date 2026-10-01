@@ -146,6 +146,8 @@ def health():
         "status": "ok",
         "version": MCP_VERSION,
         "processor_ready": processor.init_error is None,
+        "llm_provider": getattr(settings, "LLM_PROVIDER", "bedrock"),
+        "llm_model_id": settings.LLM_MODEL_ID,
     }), 200
 
 

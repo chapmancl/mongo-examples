@@ -32,7 +32,7 @@ from .agent import register_agent_tools, get_agent_bedrock_toolspecs, register_f
 from .token_service import get_or_create_agent_identity_and_token, generate_jwt, build_vscode_mcp_config, parse_scope, format_mcp_server_name
 
 # Package version
-__version__ = "3.2.1"
+__version__ = "3.3.0"
 
 # Expose main classes at package level
 __all__ = [

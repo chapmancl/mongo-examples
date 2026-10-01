@@ -251,6 +251,12 @@ def build_mcp_http_call(jwt: str, base_url: Any) -> Callable[[str, dict], Any]:
     return _http_call
 
 
+def _scope_subagent_memory_read(toolname: str, tool_input: dict, username: Optional[str]) -> dict:
+    if username and toolname in ("memory_query", "memory_recall", "memory_list_sessions"):
+        return {**tool_input, "username": username}
+    return tool_input
+
+
 def register_agent_tools(
     mcp,
     settings: Any,
@@ -296,6 +302,7 @@ def register_agent_tools(
         memory_id: Annotated[Optional[str], Field(default=None, description="ObjectId hex of a strategy document. Sub-agent is instructed to load it for context and playbook.")] = None,
         system_instructions: Annotated[Optional[str], Field(default=None, description="Platform-injected memory operating instructions. Do not set.")] = None,
         wait: Annotated[bool, Field(default=True, description="Block until the sub-agent finishes (default). Pass false to fire-and-forget for parallel fan-out and poll memory by session_id for results.")] = True,
+        username: Annotated[Optional[str], Field(default=None, description="Parent username injected by the webui for memory read ownership.")] = None,
         token: Annotated[AccessToken, Depends(get_access_token)] = None,
         ctx: Context = CurrentContext(),
     ):
@@ -327,6 +334,7 @@ def register_agent_tools(
             # Block ONLY sub-agent recursion — every other agent-domain tool is allowed.
             if toolname in ("run_prompt", "agent_run_prompt"):
                 return {"error": f"Sub-agents cannot spawn sub-agents: '{toolname}' is blocked."}
+            tool_input = _scope_subagent_memory_read(toolname, tool_input, username)
             if local_call_fn is not None:
                 try:
                     handled, result = await local_call_fn(token, toolname, tool_input)
@@ -355,7 +363,7 @@ def register_agent_tools(
         # after this request returns; it uses only captured values (jwt/base_url via
         # mcp_call_fn, token) and touches no request-scoped context. ---
         if not wait:
-            _username = session_id.split(":")[0] if session_id and ":" in session_id else None
+            _username = username or (session_id.split(":")[0] if session_id and ":" in session_id else None)
             _started_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
             _status_content = f"Sub-agent run '{agent_name}' (session {session_id}) status tracker."
             _base_payload = {

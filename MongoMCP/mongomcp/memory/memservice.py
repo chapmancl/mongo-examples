@@ -578,6 +578,7 @@ class MemoryService:
             vector=embedding,
             agent_id=agent_id,
             username=username,
+            session_id=session_id,
         )
 
         return {
@@ -1076,6 +1077,7 @@ class MemoryService:
         vector: list,
         agent_id: Optional[str] = None,
         username: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> tuple:
         """
         Run a top-5 vector search on both collections to surface near-duplicates.
@@ -1097,7 +1099,9 @@ class MemoryService:
                     col, idx_name, vector, limit=6, num_candidates=50,
                 )
                 for doc in docs:
-                    if str(doc["_id"]) == new_doc_id:
+                    if str(doc["_id"]) == new_doc_id or not self._doc_visible(
+                        doc, agent_id=agent_id or "", username=username or "", session_id=session_id,
+                    ):
                         continue
                     score = doc.get("vs_score", 0.0)
                     out.append({

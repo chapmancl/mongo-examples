@@ -775,6 +775,8 @@ class CachedQueryProcessor:
 
             # Build effective system prompt: base instructions + pre-fetched session context block.
             effective_system = list(self._system_prompt)
+            if effective_system and getattr(self.llm_client.settings, "LLM_PROVIDER", "bedrock").lower() == "grove":
+                effective_system.append({"cachePoint": {"type": "default"}})
             if self._session_context_block:
                 effective_system.append({"text": self._session_context_block})
             self.llm_client.system = effective_system

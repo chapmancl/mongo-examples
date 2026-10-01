@@ -92,6 +92,7 @@ def build_scope_filter(
     agent_id: str = "",
     username: str = "",
     session_id: str = "",
+    usernames: list[str] | None = None,
 ) -> list:
     """Build MongoDB ``$or`` clauses covering all 5 scope layers plus legacy docs.
 
@@ -113,13 +114,25 @@ def build_scope_filter(
     ]
     if agent_id:
         clauses.append({"scope": SCOPE_AGENT, "agent_id": agent_id})
-    if username:
-        clauses.append({"scope": SCOPE_USER, "username": username})
-        clauses.append({"scope": SCOPE_USER_SESSION, "username": username})
-    if username and agent_id:
-        clauses.append({
+    verified_usernames = [name for name in (usernames or [username]) if name]
+    username_filter = None
+    if len(verified_usernames) == 1:
+        username_filter = verified_usernames[0]
+    elif verified_usernames:
+        username_filter = {"$in": verified_usernames}
+    if username_filter is not None:
+        clauses.append({"scope": SCOPE_USER, "username": username_filter})
+        user_session_clause = {"scope": SCOPE_USER_SESSION, "username": username_filter}
+        if session_id:
+            user_session_clause["session_id"] = session_id
+        clauses.append(user_session_clause)
+    if username_filter is not None and agent_id:
+        session_agent_clause = {
             "scope": SCOPE_USER_SESSION_AGENT,
-            "username": username,
+            "username": username_filter,
             "agent_id": agent_id,
-        })
+        }
+        if session_id:
+            session_agent_clause["session_id"] = session_id
+        clauses.append(session_agent_clause)
     return clauses
