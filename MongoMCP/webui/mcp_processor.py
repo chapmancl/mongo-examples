@@ -10,6 +10,7 @@ import traceback
 from typing import Any, List, Optional
 
 import fastmcp
+import mcp.types as mt
 import requests
 from pydantic import BaseModel
 
@@ -20,17 +21,6 @@ from mongomcp.agent.webui_bedrock_client import WebUiBedrockClient
 import conversation_checkpoint as ckpt
 
 import logging
-
-USE_LOCAL_MODE = os.getenv('USE_LOCAL_MODE', 'false').lower() == "true"
-
-if USE_LOCAL_MODE:
-    # Start with : > fastapi run mongo_mcp.py --port 8001
-    print("# ------ Running in local mode ------ #")
-    from local_settings import settings
-else:
-    # Running with kubernetes in EKS/Fargate
-    from AWS_settings import settings
-
 logger = logging.getLogger(__name__)
 
 
@@ -705,6 +695,19 @@ class APIQueryProcessor:
                 conv_requested_limit = int(tool_input.get("limit") or 5)
                 tool_input["limit"] = min(50, max(conv_requested_limit * 5, 25))
 
+        # The MCP service token identifies this webui instance, not the human
+        # using the browser. Forward the request username for memory ownership.
+        if isinstance(tool_input, dict) and toolname in {
+            "memory_intake",
+            "memory_query",
+            "memory_recall",
+            "memory_reflect",
+            "memory_list_sessions",
+        }:
+            current_username = getattr(self, "_current_username", None)
+            if current_username:
+                tool_input["username"] = current_username
+
         endpoint_name, endpoint_tool_name = self._resolve_endpoint(toolname)
         cfg = self.mcp_endpoint_configs.get(endpoint_name)
         if cfg is None:
@@ -741,8 +744,11 @@ class APIQueryProcessor:
                 mt.CallToolResult,
             )
             _timing["send_ms"] = int((time.monotonic() - _t_send) * 1000)
-            if raw.content and hasattr(raw.content[0], "text"):
-                return raw.content[0].text
+            if raw.content:
+                for block in raw.content:
+                    if hasattr(block, "text"):
+                        return block.text
+            
             if raw.structuredContent is not None:
                 return json.dumps(raw.structuredContent)
             return str(raw)
@@ -928,6 +934,7 @@ class APIQueryProcessor:
         # (token sub); in the OSS/disabled build it's the per-browser localStorage id.
         # Either way it is NOT the shared username. Used to scope conversation recall.
         self._current_user_id = request.user_id
+        self._current_username = request.username
         # Whether this turn's identity was VERIFIED by the auth provider (vs self-declared);
         # surfaced to the agent so it never conflates the user with the service token.
         self._identity_verified = bool(getattr(request, "identity_verified", False))

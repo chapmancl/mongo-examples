@@ -6,7 +6,7 @@ MongoDB MCP (Model Context Protocol) server package providing:
 - Authentication and middleware
 - AWS Bedrock LLM integration
 - Configuration management
-- silly modification
+
 Main Classes:
 - MongoDBQueryServer: Core Mongo Query functionality
 - MongoMCPMiddleware: Request middleware, config interactions to/from MongoDB, MCP tool management
@@ -29,6 +29,7 @@ from .mongodb_client import MongoDBClient
 from .memory import register_memory_tools, get_memory_bedrock_toolspecs
 from .tools import register_query_tools
 from .agent import register_agent_tools, get_agent_bedrock_toolspecs, register_function_builder_tools, get_function_builder_toolspecs, register_external_api_tools, get_external_api_toolspecs
+from .token_service import get_or_create_agent_identity_and_token, generate_jwt, build_vscode_mcp_config, parse_scope, format_mcp_server_name
 
 # Package version
 __version__ = "3.2.1"
@@ -50,4 +51,9 @@ __all__ = [
    "get_function_builder_toolspecs",
    "register_external_api_tools",
    "get_external_api_toolspecs",
+   "get_or_create_agent_identity_and_token",
+   "generate_jwt",
+   "build_vscode_mcp_config",
+   "parse_scope",
+   "format_mcp_server_name",
 ]

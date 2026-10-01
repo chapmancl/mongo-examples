@@ -231,8 +231,10 @@ def build_mcp_http_call(jwt: str, base_url: Any) -> Callable[[str, dict], Any]:
                         ),
                         mt.CallToolResult,
                     )
-                if raw.content and hasattr(raw.content[0], "text"):
-                    return raw.content[0].text
+                if raw.content:
+                    for block in raw.content:
+                        if hasattr(block, "text"):
+                            return block.text
                 if raw.structuredContent is not None:
                     return json.dumps(raw.structuredContent)
                 return str(raw)

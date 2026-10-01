@@ -77,7 +77,7 @@ class MemoryService:
         before every operation.
     llm_client:
         A BedrockClient instance that exposes generate_embedding() and
-        invoke_converse_text().
+        invoke_bedrock_text().
     memory_db_name:
         The MongoDB database that holds the memory collections.
         Typically comes from settings.memory_db (default "mcp_config").
@@ -178,34 +178,40 @@ class MemoryService:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _doc_visible(doc: dict, agent_id: str = "", username: str = "") -> bool:
-        """Return True if *doc* is visible to the caller identified by agent_id/username.
-
-        Evaluates the scope int field (new model) with fallback to legacy is_isolated bool.
-        """
+    def _doc_visible(
+        doc: dict,
+        agent_id: str = "",
+        username: str = "",
+        session_id: Optional[str] = None,
+        usernames: Optional[List[str]] = None,
+    ) -> bool:
+        """Return True if *doc* is visible to the caller's verified identity."""
         from .scope import (
             SCOPE_SHARED, SCOPE_AGENT, SCOPE_USER,
             SCOPE_USER_SESSION, SCOPE_USER_SESSION_AGENT,
         )
         scope = doc.get("scope")
         if scope is None:
-            # Legacy doc: visible unless explicitly isolated to a different owner.
             return not doc.get("is_isolated", False)
         if scope == SCOPE_SHARED:
             return True
         if scope == SCOPE_AGENT:
             return bool(agent_id) and doc.get("agent_id") == agent_id
+        verified_usernames = set(usernames or ([username] if username else []))
         if scope == SCOPE_USER:
-            return bool(username) and doc.get("username") == username
+            return bool(verified_usernames) and doc.get("username") in verified_usernames
         if scope == SCOPE_USER_SESSION:
-            return bool(username) and doc.get("username") == username
+            return (
+                bool(verified_usernames) and doc.get("username") in verified_usernames
+                and (session_id is None or doc.get("session_id") == session_id)
+            )
         if scope == SCOPE_USER_SESSION_AGENT:
             return (
-                bool(username) and doc.get("username") == username
+                bool(verified_usernames) and doc.get("username") in verified_usernames
                 and bool(agent_id) and doc.get("agent_id") == agent_id
+                and (session_id is None or doc.get("session_id") == session_id)
             )
-        # Unknown scope: default visible.
-        return True
+        return False
 
     # ------------------------------------------------------------------
     # Internal schema validation helper
@@ -432,10 +438,13 @@ class MemoryService:
             except Exception:
                 return {"error": f"Invalid _id format: {_id!r}"}
 
+            updated_at = datetime.datetime.now(datetime.timezone.utc)
             update_fields: Dict[str, Any] = {
                 "memory_type": memory_type,
                 "importance": importance,
                 "decay_rate": decay_rate,
+                "updated_at": updated_at,
+                "last_updated_at": updated_at,
             }
             # content/embedding are only rewritten when content is supplied — a
             # payload-only update leaves the existing vector untouched (no re-embed).
@@ -513,6 +522,8 @@ class MemoryService:
             "session_id": session_id,
             "embedding": embedding,
             "created_at": _now,
+            "updated_at": _now,
+            "last_updated_at": _now,
             "last_accessed": _now,
             "access_count": 0,
             "related_docs": explicit_related_docs,
@@ -584,6 +595,7 @@ class MemoryService:
         session_id: Optional[str] = None,
         agent_id: Optional[str] = None,
         username: Optional[str] = None,
+        usernames: Optional[List[str]] = None,
         scope: str = "all",
         limit: int = 5,
         num_candidates: int = 150,
@@ -620,6 +632,20 @@ class MemoryService:
         """
         await self._ensure_connected()
 
+        effective_username = username or agent_id or ""
+        verified_usernames = [name for name in (usernames or [effective_username]) if name]
+        logger.debug(
+            "memory recall start agent_id=%r username=%r verified_usernames=%r "
+            "scope=%r session_id=%r query_present=%s entities=%r",
+            agent_id,
+            username,
+            verified_usernames,
+            scope,
+            session_id,
+            bool(query and query.strip()),
+            entities,
+        )
+
         # --- Routing decision ---
         has_query = bool(query and query.strip())
         has_entities = bool(entities)
@@ -635,7 +661,7 @@ class MemoryService:
         # --- Entities-only path: direct find, no vector scan ---
         if has_entities and not has_query:
             entity_set = set(entities)  # type: ignore[arg-type]
-            owner = agent_id or username
+            owner = agent_id or effective_username
             collections = self._collections_for_scope(scope)
             initial_results: List[dict] = []
             seen_ids: set = set()
@@ -661,11 +687,16 @@ class MemoryService:
                         doc["_src_col"] = coll_name
                         seen_ids.add(doc["_id"])
                         initial_results.append(doc)
-            if owner:
-                initial_results = [
-                    d for d in initial_results
-                    if self._doc_visible(d, agent_id=agent_id or "", username=username or "")
-                ]
+            initial_results = [
+                d for d in initial_results
+                if self._doc_visible(
+                    d,
+                    agent_id=agent_id or "",
+                    username=effective_username,
+                    usernames=verified_usernames,
+                    session_id=session_id,
+                )
+            ]
             if initial_results:
                 # Score and return — skip graph expansion on entities-only path.
                 scored: List[dict] = []
@@ -808,12 +839,23 @@ class MemoryService:
 
         # Python post-filter: scope-aware ownership check.
         # A doc is visible based on its scope field; legacy docs fall back to is_isolated.
-        owner = agent_id or username
-        if owner:
-            initial_results = [
-                d for d in initial_results
-                if self._doc_visible(d, agent_id=agent_id or "", username=username or "")
-            ]
+        owner = agent_id or effective_username
+        initial_count = len(initial_results)
+        initial_results = [
+            d for d in initial_results
+            if self._doc_visible(
+                d,
+                agent_id=agent_id or "",
+                username=effective_username,
+                usernames=verified_usernames,
+                session_id=session_id,
+            )
+        ]
+        logger.debug(
+            "memory recall scope filter candidates_before=%d candidates_after=%d",
+            initial_count,
+            len(initial_results),
+        )
 
         # Python post-filter: entities (not a filterable field in any Atlas index).
         if entities:
@@ -1262,7 +1304,7 @@ class MemoryService:
             f"{memory_text}"
         )
 
-        summary_text = await self.llm_client.invoke_converse_text(prompt)
+        summary_text = await self.llm_client.invoke_bedrock_text(prompt)
 
         if not summary_text:
             return {"error": "LLM summarisation failed — empty response", "session_id": session_id, "memories_reflected": len(docs)}
@@ -1328,13 +1370,14 @@ class MemoryService:
         sort_dir: str = "desc",
         agent_id: Optional[str] = None,
         username: Optional[str] = None,
+        usernames: Optional[List[str]] = None,
         query: Optional[str] = None,
         ids: Optional[List[str]] = None,
     ) -> dict:
         """Query memories by filter, scope (episodic|strategies), and sort.
 
-        When ids=[...] is provided, bypasses all scope/ownership filters and
-        fetches by _id only — caller already knows the exact documents.
+        When ids=[...] is provided, fetches by _id and applies the same
+        scope/ownership filter as ordinary queries.
         When 'query' is provided, uses $rankFusion (vector + fulltext) for
         strategies or $vectorSearch for episodic. Falls back to plain find
         when no query string is given.
@@ -1342,7 +1385,13 @@ class MemoryService:
         """
         await self._ensure_connected()
 
-        # --- Direct ID fetch: bypass scope filter entirely ---
+        effective_username = username or agent_id or ""
+        verified_usernames = [name for name in (usernames or [effective_username]) if name]
+        requested_session = (filter or {}).get("session_id")
+        if not isinstance(requested_session, str):
+            requested_session = None
+
+        # --- Direct ID fetch: apply the same scope filter as ordinary queries ---
         if ids:
             oid_list: List[ObjectId] = []
             for raw_id in ids:
@@ -1358,14 +1407,31 @@ class MemoryService:
             for coll_name in [COLLECTION_EPISODIC, COLLECTION_SEMANTIC]:
                 col = self._col(coll_name)
                 async for doc in col.find(id_filter, projection={"embedding": 0}):
-                    doc["_src_col"] = coll_name
-                    raw_results.append(doc)
+                    visible = self._doc_visible(
+                        doc,
+                        agent_id=agent_id or "",
+                        username=effective_username,
+                        usernames=verified_usernames,
+                        session_id=requested_session,
+                    )
+                    logger.debug(
+                        "memory query candidate id=%s collection=%s username=%r agent_id=%r scope=%r visible=%s",
+                        doc.get("_id"),
+                        coll_name,
+                        doc.get("username"),
+                        doc.get("agent_id"),
+                        doc.get("scope"),
+                        visible,
+                    )
+                    if visible:
+                        doc["_src_col"] = coll_name
+                        raw_results.append(doc)
             self._schedule_bump_access(raw_results)
             results = [strip_embedding(doc, doc.get("_src_col", COLLECTION_EPISODIC)) for doc in raw_results]
             return {"results": results, "count": len(results)}
 
         mongo_filter = filter or {}
-        owner = agent_id or username
+        owner = agent_id or effective_username
 
         # Determine target collection.
         if "session_id" in mongo_filter:
@@ -1395,11 +1461,16 @@ class MemoryService:
                 except Exception as exc:
                     logger.warning("vectorSearch in query() failed: %s", exc)
 
-            if owner:
-                candidates = [
-                    d for d in candidates
-                    if self._doc_visible(d, agent_id=agent_id or "", username=username or "")
-                ]
+            candidates = [
+                d for d in candidates
+                if self._doc_visible(
+                    d,
+                    agent_id=agent_id or "",
+                    username=effective_username,
+                    usernames=verified_usernames,
+                    session_id=requested_session,
+                )
+            ]
 
             top_docs = candidates[:limit]
             for d in top_docs:
@@ -1416,14 +1487,17 @@ class MemoryService:
             return response
 
         # --- Plain find path ---
-        if owner and "agent_id" not in mongo_filter and "username" not in mongo_filter:
+        if owner:
             mongo_filter = {
-                **mongo_filter,
-                "$or": build_scope_filter(
-                    agent_id=agent_id or "",
-                    username=username or "",
-                    session_id="",
-                ),
+                "$and": [
+                    mongo_filter,
+                    {"$or": build_scope_filter(
+                        agent_id=agent_id or "",
+                        username=effective_username,
+                        usernames=verified_usernames,
+                        session_id=requested_session or "",
+                    )},
+                ],
             }
 
         if col_name == COLLECTION_STRATEGIES and "strategy_key" not in mongo_filter:
@@ -1437,8 +1511,15 @@ class MemoryService:
             sort=[(sort_by, sort_direction)],
             limit=limit,
         ):
-            doc["_src_col"] = col_name
-            raw_results.append(doc)
+            if self._doc_visible(
+                doc,
+                agent_id=agent_id or "",
+                username=effective_username,
+                usernames=verified_usernames,
+                session_id=requested_session,
+            ):
+                doc["_src_col"] = col_name
+                raw_results.append(doc)
 
         self._schedule_bump_access(raw_results, default_collection=col_name)
         results = [strip_embedding(doc, col_name) for doc in raw_results]
@@ -1456,6 +1537,8 @@ class MemoryService:
         self,
         filter: Optional[Dict[str, Any]] = None,
         limit: int = 20,
+        agent_id: Optional[str] = None,
+        usernames: Optional[List[str]] = None,
     ) -> dict:
         """
         List sessions using a $group aggregation that returns memory_count
@@ -1470,7 +1553,13 @@ class MemoryService:
 
         # Separate $regex conditions so they don't reach Atlas.
         base_filter, regex_filters = split_regex_filters(filter or {})
-        session_filter = {**base_filter, "session_id": {"$ne": None}}
+        session_filter = {
+            "$and": [
+                base_filter,
+                {"session_id": {"$ne": None}},
+                {"$or": build_scope_filter(agent_id=agent_id or "", usernames=usernames)},
+            ],
+        }
 
         pipeline = [
             {"$match": session_filter},
@@ -1478,7 +1567,7 @@ class MemoryService:
                 "$group": {
                     "_id": "$session_id",
                     "memory_count": {"$sum": 1},
-                    "last_updated_at": {"$max": "$created_at"},
+                    "last_updated_at": {"$max": {"$ifNull": ["$last_updated_at", {"$ifNull": ["$updated_at", "$created_at"]}]}},
                     "last_memory_type": {"$last": "$memory_type"},
                 }
             },
@@ -2025,27 +2114,24 @@ class MemoryService:
     async def get_instructions(self) -> dict:
         """
         Assemble agent operating instructions from three sources (mirrors get_instructions.go):
-          1. Static base (agent_instructions field) — HTML comments stripped.
-          2. Latest agent:blueprint from memory_semantic — appended as a section.
-          3. Live memory_type inventory — distinct types across both collections.
+          1. Latest agent:blueprint from memory_semantic — appended as a section.
+          2. Static base (agent_instructions field) — HTML comments stripped.          
         All DB sources fail silently so a cold-start (empty DB) always returns something.
-        """
-        # 1. Base — strip HTML comments.
-        base = self._HTML_COMMENT_RE.sub("", self.agent_instructions or "").strip()
-
-        # 2. Blueprint section.
+        """        
+        # 1. Blueprint section.
         blueprint_section = ""
         try:
             await self._ensure_connected()
-            col = self._col(COLLECTION_SEMANTIC)
             doc = await self._get_most_recent_strategy("master_instructions")
             if doc:
-                content = (doc.get("content") or "").strip()
-                if content:
-                    blueprint_section = "\n\n---\n\n## Agent Blueprint\n\n" + content
+                blueprint_section = (doc.get("content") or "").strip()
         except Exception as exc:
-            logger.warning("get_instructions: failed to fetch blueprint: %s", exc)
+            logger.warning("get_instructions: failed to fetch blueprint master_instructions")
+        
+        instructions = blueprint_section
+        if not instructions.strip():
+            # 2. Base — strip HTML comments.
+            instructions = self._HTML_COMMENT_RE.sub("", self.agent_instructions or "").strip()
 
-        instructions = base + blueprint_section
         logger.debug("get_instructions called: returning %d chars", len(instructions))
         return {"instructions": instructions}

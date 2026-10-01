@@ -317,3 +317,213 @@ button {
   background-color: #e1e4e8;
   border: 0;
 }
+
+/* MCP Configuration Modal */
+.mcp-modal-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 30, 43, 0.6);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 16px;
+}
+
+.mcp-modal-dialog {
+  background: var(--mdb-surface);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  width: 100%;
+  max-width: 720px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #d7e0e4;
+  animation: mcpModalFadeIn 0.2s ease-out;
+}
+
+@keyframes mcpModalFadeIn {
+  from { opacity: 0; transform: translateY(-10px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.mcp-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  background: var(--mdb-dark);
+  color: #fff;
+}
+
+.mcp-modal-header h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #fff;
+}
+
+.mcp-modal-close {
+  background: transparent;
+  border: none;
+  color: #a5b4be;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: all 0.15s;
+}
+
+.mcp-modal-close:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.mcp-modal-body {
+  padding: 18px 20px;
+  overflow-y: auto;
+  flex: 1;
+  font-size: 13px;
+  color: #333;
+}
+
+.mcp-section {
+  margin-bottom: 16px;
+}
+
+.mcp-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.mcp-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--mdb-dark);
+}
+
+.mcp-code-container {
+  position: relative;
+  background: #001e2b;
+  border-radius: 8px;
+  border: 1px solid #002d3e;
+  overflow: hidden;
+}
+
+.mcp-code-block {
+  margin: 0;
+  padding: 14px 16px;
+  color: #00ed64;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-x: auto;
+  max-height: 220px;
+  white-space: pre;
+}
+
+.mcp-token-block {
+  margin: 0;
+  padding: 12px 14px;
+  color: #e0f8ea;
+  background: #001e2b;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-x: auto;
+  word-break: break-all;
+  white-space: pre-wrap;
+  max-height: 90px;
+  border-radius: 8px;
+}
+
+.mcp-copy-button {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: all 0.15s;
+}
+
+.mcp-copy-button:hover {
+  background: rgba(0, 237, 100, 0.2);
+  border-color: #00ed64;
+  color: #00ed64;
+}
+
+.mcp-copy-button.copied {
+  background: #00684a;
+  border-color: #00ed64;
+  color: #00ed64;
+}
+
+.mcp-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  background: #e8f5ee;
+  color: #00684a;
+}
+
+.mcp-info-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 12px;
+  padding: 10px 14px;
+  background: #f4f6f5;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.mcp-info-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mcp-info-label {
+  font-size: 11px;
+  color: #666;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.mcp-info-value {
+  color: #001e2b;
+  font-weight: 500;
+  font-family: monospace;
+}
+
+.mcp-modal-footer {
+  padding: 12px 20px;
+  background: #f9faf9;
+  border-top: 1px solid #e0e0e0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}

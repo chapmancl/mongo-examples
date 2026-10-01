@@ -11,7 +11,6 @@ import asyncio
 import hashlib
 import time
 import traceback
-import voyageai
 from typing import Any, Callable, Dict, List, Optional
 import logging
 import httpx
@@ -675,10 +674,16 @@ class BedrockClient:
                     return_obj["stats"] = {"total_itterations": iteration + 1, "max_itterations": self.max_iterations}     
                     # Always pass the raw assistant text through unchanged.
                     # JSON extraction is handled downstream via [JSON_DATA_START]
-                    # tags only — no brace-counting.
+                    # tags only — no brace-counting.                    
                     if len(messages) > 0 and messages[-1]["role"] == "assistant":
-                        msg = messages[-1]["content"][0]["text"]
-                        return_obj["response"] = msg
+                        text_parts = [
+                            content["text"]
+                            for content in messages[-1].get("content", [])
+                            if isinstance(content, dict) and "text" in content
+                        ]
+                        if text_parts:
+                            return_obj["response"] = " ".join(text_parts)
+                    
                     return return_obj
                 
                 # If we get here, there was no content to process

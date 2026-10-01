@@ -596,7 +596,7 @@ class MongoMCPMiddleware(Middleware):
         try:
             return await call_next(context)
         finally:
-            logger.info(
+            logger.debug(
                 "on_call_tool timing: tool=%r endpoint=%r server_total=%d ms "
                 "(config_refresh=%d ms, pre_call=%d ms, handler=%d ms)",
                 tool_name, self.endpoint_name,

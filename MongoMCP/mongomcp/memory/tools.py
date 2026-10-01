@@ -75,6 +75,7 @@ def build_memory_tool_fns(svc: MemoryService):
         scope: str = "all",
         limit: int = 5,
         num_candidates: int = 150,
+        usernames: Optional[List[str]] = None,
         score_threshold: float = 0.0,
         importance_threshold: float = 0.0,
         memory_types: Optional[List[str]] = None,
@@ -91,6 +92,7 @@ def build_memory_tool_fns(svc: MemoryService):
                 session_id=session_id,
                 agent_id=agent_id,
                 username=username,
+                usernames=usernames,
                 scope=scope,
                 limit=limit,
                 num_candidates=num_candidates,
@@ -143,11 +145,17 @@ def build_memory_tool_fns(svc: MemoryService):
         scope: str = "episodic",
         sort_by: str = "created_at",
         sort_dir: str = "desc",
+        agent_id: Optional[str] = None,
+        username: Optional[str] = None,
+        usernames: Optional[List[str]] = None,
         ids: Optional[List[str]] = None,
     ) -> dict:
         """Query memories by filter dict, scope (episodic | strategies), sort options, or direct ID list."""
         try:
             return await svc.query(
+                agent_id=agent_id,
+                username=username,
+                usernames=usernames,
                 filter=filter,
                 limit=limit,
                 scope=scope,
@@ -163,10 +171,12 @@ def build_memory_tool_fns(svc: MemoryService):
     async def list_sessions(
         filter: Optional[Dict[str, Any]] = None,
         limit: int = 20,
+        agent_id: Optional[str] = None,
+        usernames: Optional[List[str]] = None,
     ) -> dict:
         """List sessions by finding session:summary memories, with fallback to grouped session_id."""
         try:
-            return await svc.list_sessions(filter=filter, limit=limit)
+            return await svc.list_sessions(filter=filter, limit=limit, agent_id=agent_id, usernames=usernames)
         except Exception as exc:
             logger.error("list_sessions failed: %s", exc)
             logger.debug("".join(traceback.format_exception(None, exc, exc.__traceback__)))

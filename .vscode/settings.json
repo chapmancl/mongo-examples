@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^\\$files = @\\('C:/Users/ChrisChapman/Documents/dev/localbranch/mongo-examples/MongoMCP/webui/mcp_processor\\.py','C:/Users/ChrisChapman/Documents/linshare/dynamicmcp/webui/mcp_processor\\.py'\\); foreach \\(\\$file in \\$files\\) \\{ Select-String -Path \\$file -Pattern '\\^import mcp\\\\\\.types as mt\\|invoke_\\(client\\|bedrock\\)_with_tools_text\\|_current_username\\|The MCP service token identifies\\|logger\\\\\\.\\(info\\|debug\\)\\\\\\(' \\| Where-Object \\{ \\$_\\.Line -match 'mcp\\\\\\.types\\|invoke_\\(client\\|bedrock\\)\\|_current_username\\|MCP service token\\|MCP timing' \\} \\| ForEach-Object \\{ '\\{0\\}:\\{1\\}: \\{2\\}' -f \\$file,\\$_\\.LineNumber,\\$_\\.Line\\.Trim\\(\\) \\} \\}$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

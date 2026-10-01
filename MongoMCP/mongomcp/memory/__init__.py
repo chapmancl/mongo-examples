@@ -5,7 +5,6 @@ Public API:  register_memory_tools(mcp, db_client, llm_client, settings)
 
 Call this after creating the FastMCP instance and before calling
 mcp.http_app() so that all memory tools are registered on the same
-MCP instance and share the same auth provider.
 
 Returns a dict of {tool_name: fn} suitable for merging into _TOOL_DISPATCH
 in mongo_mcp.py.
@@ -42,7 +41,7 @@ def register_memory_tools(mcp, db_client, llm_client, settings) -> Dict[str, Any
     ----------
     mcp       : FastMCP instance (already configured with auth)
     db_client : MongoDBClient — motor client used to reach memory collections
-    llm_client: BedrockClient — used for generate_embedding and invoke_converse_text
+    llm_client: BedrockClient — used for generate_embedding and invoke_bedrock_text
     settings  : AWSSettings / LocalSettings — must have .memory_db attribute
 
     Returns
@@ -82,19 +81,21 @@ def register_memory_tools(mcp, db_client, llm_client, settings) -> Dict[str, Any
         entities: Annotated[Optional[List[str]], Field(default=None, description="Named entities mentioned in the memory.")] = None,
         payload: Annotated[Optional[Dict[str, Any]], Field(default=None, description="Arbitrary structured metadata. Do NOT put 'scope' here — use the top-level scope parameter.")] = None,
         payload_push: Annotated[Optional[Dict[str, Any]], Field(default=None, description="Update-mode only (requires _id). Appends values to existing payload array fields using $push — without replacing the whole payload. Keys are payload field names; values are items to append. Pass a list as the value to append multiple items at once ($each). Example: {\"batches_array\": {\"batch_id\": 61, \"score\": 0.9}}.")] = None,
-        username: Annotated[Optional[str], Field(default=None, description="Username storing the memory.")] = None,
+        username: Annotated[Optional[str], Field(default=None, description="Username supplied by VS Code or overridden by the trusted webui identity; falls back to the token identity when omitted.")] = None,
         schema_version: Annotated[Optional[str], Field(default=None, description="Declared schema name to validate the payload against. Warnings returned but write still succeeds.")] = None,
         scope: Annotated[int, Field(default=-1, description="Visibility scope — MUST be a top-level parameter, not inside payload. 0=shared (all agents), 10=agent-only, 20=this user any session, 30=this user+session (default), 40=this user+session+agent. -1 = use default (30).")] = -1,
         related_docs: Annotated[Optional[List[Dict[str, Any]]], Field(default=None, description="Explicit graph links to store on this memory. Each entry: {id: ObjectID hex, relation: string, explicit: true}. No automatic vector-search linking is performed — use memory_reflect(operation='link') after the fact for bulk linking.")] = None,
         _id: Annotated[Optional[str], Field(default=None, description="Optional ObjectID hex string. When provided, updates the existing memory with this _id in-place rather than inserting a new document. Re-embeds only when content is supplied; a payload-only update leaves the vector untouched. The _id, related_docs, and session_id are preserved so all graph links remain valid.")] = None,
         token: Annotated[AccessToken, Depends(get_access_token)] = None,
     ):
-        """Store a memory with optional explicit related_docs links. Near-duplicate warning returned if cosine similarity >= 0.92 with an existing doc. No automatic links are created — use memory_reflect(operation='link') to add links explicitly."""
+        """Store a memory with optional explicit related_docs links. Username is accepted for direct VS Code calls and is overridden by webui before forwarding. The token identity remains the fallback."""
         agent_id = _agent_id_from_token(token)
+        claims = getattr(token, "claims", {}) or {}
+        stored_username = username or claims.get("username") or agent_id
         return await raw_fns["intake"](
             content=content, memory_type=memory_type, importance=importance,
             decay_rate=decay_rate, session_id=session_id, tags=tags, entities=entities,
-            payload=payload, payload_push=payload_push, username=username,
+            payload=payload, payload_push=payload_push, username=stored_username,
             agent_id=agent_id, schema_version=schema_version,
             scope=scope, related_docs=related_docs, _id=_id,
         )
@@ -119,9 +120,19 @@ def register_memory_tools(mcp, db_client, llm_client, settings) -> Dict[str, Any
     ):
         """Recall memories via semantic vector search or direct entity filter, with multi-hop BFS graph expansion and composite scoring. Routing: query+entities=vector+post-filter; entities-only=direct find (no embedding); query-only=pure vector; neither=error."""
         agent_id = _agent_id_from_token(token)
+        claims = getattr(token, "claims", {}) or {}
+        canonical_username = username or claims.get("username") or agent_id
+        aliases = claims.get("aliases") or []
+        verified_usernames = [name for name in [canonical_username, *aliases] if name]
+        logger.debug(
+            "memory recall identity agent_id=%r username=%r verified_usernames=%r "
+            "scope=%r session_id=%r memory_types=%r",
+            agent_id, username, verified_usernames, scope, session_id, memory_types,
+        )
         return await raw_fns["recall"](
             query=query, session_id=session_id,
-            agent_id=agent_id, username=username,
+            agent_id=agent_id, username=canonical_username,
+            usernames=verified_usernames,
             scope=scope, limit=limit, num_candidates=num_candidates,
             score_threshold=score_threshold, importance_threshold=importance_threshold,
             memory_types=memory_types, tags=tags, entities=entities,
@@ -143,11 +154,13 @@ def register_memory_tools(mcp, db_client, llm_client, settings) -> Dict[str, Any
     ):
         """Multi-operation memory maintenance: summarise a session via LLM (stores agent_id from token + caller-supplied username on the summary), create explicit bidirectional related_docs links, or overwrite entities[] on existing memories."""
         agent_id = _agent_id_from_token(token)
+        claims = getattr(token, "claims", {}) or {}
+        stored_username = username or claims.get("username") or agent_id
         return await raw_fns["reflect"](
             session_id=session_id,
             operation=operation, memory_ids=memory_ids, target_ids=target_ids,
             link_relation=link_relation, inverse_relation=inverse_relation,
-            entities=entities, agent_id=agent_id, username=username,
+            entities=entities, agent_id=agent_id, username=stored_username,
         )
 
     @mcp.tool()
@@ -157,10 +170,26 @@ def register_memory_tools(mcp, db_client, llm_client, settings) -> Dict[str, Any
         scope: Annotated[str, Field(default="episodic", description="Collection scope: 'episodic' or 'strategies'.")] = "episodic",
         sort_by: Annotated[str, Field(default="created_at", description="Field to sort by.")] = "created_at",
         sort_dir: Annotated[str, Field(default="desc", description="Sort direction: 'asc' or 'desc'.")] = "desc",
-        ids: Annotated[Optional[List[str]], Field(default=None, description="List of ObjectID hex strings for direct ID fetch. Bypasses all scope/ownership filters — searches both collections. Any filter fields are applied on top of the ID match.")] = None,
+        username: Annotated[Optional[str], Field(default=None, description="Username injected by a trusted webui request. Direct agents should omit it; the token agent identity is used instead.")] = None,
+        ids: Annotated[Optional[List[str]], Field(default=None, description="List of ObjectID hex strings for direct ID fetch. Scope and ownership rules still apply — searches both collections. Any filter fields are applied on top of the ID match.")] = None,
+        token: Annotated[AccessToken, Depends(get_access_token)] = None,
     ):
-        """Query memories by filter, scope, and sort. ids=[...] bypasses ALL scope filters and searches BOTH collections by _id — use this for exact retrieval when you have an ObjectId from a prior result. Do NOT use filter={'_id': '...'} — string _id is NOT cast to ObjectId."""
+        """Query memories by filter, scope, and sort. ids=[...] searches BOTH collections by _id while still applying scope and ownership rules. Use it for exact retrieval when you have an ObjectId from a prior result. Do NOT use filter={'_id': '...'} — string _id is NOT cast to ObjectId."""
+        agent_id = _agent_id_from_token(token)
+        claims = getattr(token, "claims", {}) or {}
+        canonical_username = username or claims.get("username") or agent_id
+        aliases = claims.get("aliases") or []
+        verified_usernames = [name for name in [canonical_username, *aliases] if name]
+        logger.debug(
+            "memory query identity agent_id=%r username=%r verified_usernames=%r ids=%r",
+            agent_id,
+            username,
+            verified_usernames,
+            ids,
+        )
         return await raw_fns["query"](
+            agent_id=agent_id,
+            usernames=verified_usernames,
             filter=filter, limit=limit, scope=scope,
             sort_by=sort_by, sort_dir=sort_dir, ids=ids,
         )
@@ -169,9 +198,17 @@ def register_memory_tools(mcp, db_client, llm_client, settings) -> Dict[str, Any
     async def list_sessions(
         filter: Annotated[Optional[Dict[str, Any]], Field(default=None, description="Optional filter applied to session lookup.")] = None,
         limit: Annotated[int, Field(default=20, description="Maximum sessions to return.", ge=1, le=200)] = 20,
+        username: Annotated[Optional[str], Field(default=None, description="Username injected by a trusted webui request. Direct agents should omit it; the token agent identity is used instead.")] = None,
+        token: Annotated[AccessToken, Depends(get_access_token)] = None,
     ):
         """List sessions by finding session:summary memories, with fallback to distinct session_id grouping."""
-        return await raw_fns["list_sessions"](filter=filter, limit=limit)
+        agent_id = _agent_id_from_token(token)
+        claims = getattr(token, "claims", {}) or {}
+        canonical_username = username or claims.get("username") or agent_id
+        verified_usernames = [name for name in [canonical_username, *(claims.get("aliases") or [])] if name]
+        return await raw_fns["list_sessions"](
+            filter=filter, limit=limit, agent_id=agent_id, usernames=verified_usernames,
+        )
 
     @mcp.tool()
     async def schema_declare(
@@ -387,18 +424,18 @@ def get_memory_bedrock_toolspecs() -> List[Dict[str, Any]]:
         _spec(
             "query",
             "Query memories by filter, scope, and sort without semantic search. "
-            "DIRECT ID LOOKUP: pass ids=[\"<objectid_hex>\", ...] to bypass ALL scope/ownership filters "
-            "and fetch by _id across BOTH memory_episodic AND memory_semantic. "
+            "DIRECT ID LOOKUP: pass ids=[\"<objectid_hex>\", ...] to fetch by _id across "
+            "BOTH memory_episodic AND memory_semantic. Scope and ownership filters still apply. "
             "Use this when you have an _id from a prior result and want exact retrieval. "
             "Do NOT use filter={'_id': '...'} — string _id values are NOT cast to ObjectId. "
             "For semantic/long-term memories use memory_recall instead.",
             {
                 "filter":   {"type": "object",  "description": "MongoDB filter dict to narrow results. Do NOT put _id here — use the ids parameter for ID lookup."},
                 "limit":    {"type": "integer", "description": "Maximum documents to return.", "default": 20},
-                "scope":    {"type": "string",  "description": "Collection scope: 'episodic' (default), 'strategies'. Ignored when ids is provided.", "default": "episodic"},
+                "scope":    {"type": "string",  "description": "Collection scope: 'episodic' (default), 'strategies'. The ids lookup still applies scope and ownership filters.", "default": "episodic"},
                 "sort_by":  {"type": "string",  "description": "Field to sort by.", "default": "created_at"},
                 "sort_dir": {"type": "string",  "description": "Sort direction: 'asc' or 'desc'.", "default": "desc"},
-                "ids":      {"type": "array",   "items": {"type": "string"}, "description": "List of ObjectID hex strings for direct ID fetch. Bypasses ALL scope and ownership filters. Searches both memory_episodic and memory_semantic. Use when you have an _id from a prior result. Any filter fields are applied on top of the ID match."},
+                "ids":      {"type": "array",   "items": {"type": "string"}, "description": "List of ObjectID hex strings for direct ID fetch. Scope and ownership filters still apply. Searches both memory_episodic and memory_semantic. Use when you have an _id from a prior result. Any filter fields are applied on top of the ID match."},
             },
             [],
         ),

@@ -45,7 +45,7 @@ function parseHistoryToTurns(history) {
     if (isToolResultOnly) { i++; continue }
 
     const userText = userContent
-      .filter(b => 'text' in b || typeof b === 'string')
+      .filter(b => typeof b === 'string' || (typeof b === 'object' && b !== null && 'text' in b))
       .map(b => (typeof b === 'string' ? b : b.text || ''))
       .join('\n')
       .trim()
@@ -158,6 +158,15 @@ export default function App() {
   // Persisted so a reload keeps the UI authoritative across gunicorn workers.
   const [functionStage, setFunctionStage] = useState(() => localStorage.getItem('mcp_function_stage') || 'prod')
   const [stageSwitching, setStageSwitching] = useState(false)
+
+  // MCP token & VS Code config modal state
+  const [mcpModalOpen, setMcpModalOpen] = useState(false)
+  const [mcpConfigData, setMcpConfigData] = useState(null)
+  const [mcpLoading, setMcpLoading] = useState(false)
+  const [mcpError, setMcpError] = useState(null)
+  const [copiedConfig, setCopiedConfig] = useState(false)
+  const [copiedToken, setCopiedToken] = useState(false)
+  const [regeneratingToken, setRegeneratingToken] = useState(false)
 
   const modelId = import.meta.env.VITE_LLM_MODEL_ID || ''
 
@@ -499,6 +508,73 @@ export default function App() {
     finally { setStageSwitching(false) }
   }
 
+  async function fetchMcpConfig(regenerate = false) {
+    setMcpModalOpen(true)
+    if (regenerate) {
+      setRegeneratingToken(true)
+    } else {
+      setMcpLoading(true)
+    }
+    setMcpError(null)
+    setCopiedConfig(false)
+    setCopiedToken(false)
+    try {
+      const res = await fetch(`${API_URL}/mcp_config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, regenerate }),
+      })
+      const data = await res.json()
+      if (!res.ok || data.status === 'error') {
+        throw new Error(data.error || 'Failed to retrieve MCP configuration')
+      }
+      setMcpConfigData(data)
+    } catch (e) {
+      setMcpError(String(e.message || e))
+    } finally {
+      setMcpLoading(false)
+      setRegeneratingToken(false)
+    }
+  }
+
+  function copyToClipboard(text, type) {
+    if (!text) return
+    const onSuccess = () => {
+      if (type === 'config') {
+        setCopiedConfig(true)
+        setTimeout(() => setCopiedConfig(false), 2000)
+      } else if (type === 'token') {
+        setCopiedToken(true)
+        setTimeout(() => setCopiedToken(false), 2000)
+      }
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(onSuccess).catch(() => {
+        fallbackCopy(text, onSuccess)
+      })
+    } else {
+      fallbackCopy(text, onSuccess)
+    }
+  }
+
+  function fallbackCopy(text, onSuccess) {
+    try {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.style.position = 'fixed'
+      ta.style.left = '-999999px'
+      ta.style.top = '-999999px'
+      document.body.appendChild(ta)
+      ta.focus()
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+      onSuccess()
+    } catch (err) {
+      console.error('Failed to copy text', err)
+    }
+  }
+
   // Greeting turn: hide the user bubble but show the AI's welcome response.
   const isGreeting = (t) => t.userText.startsWith('Hi, my username is')
   const visibleTurns = transcript
@@ -511,6 +587,14 @@ export default function App() {
         <img src="/leaflogo.png" alt="Logo" style={{ height: 44, width: 'auto' }} />
         <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: '#001E2B' }}>MongoDB Atlas MCP AI Demo</h1>
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <button
+            className="btn-secondary"
+            onClick={() => fetchMcpConfig(false)}
+            title="View your MCP JWT token and copy VS Code configuration"
+            style={{ fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 6 }}
+          >
+            🔑 Get MCP Config
+          </button>
           <button
             className="btn-secondary"
             onClick={toggleFunctionStage}
@@ -649,6 +733,116 @@ export default function App() {
           <button className="btn-secondary" onClick={clearHistory} disabled={loading}>Clear chat</button>
         </div>
       </footer>
+
+      {/* VS Code MCP Configuration Modal */}
+      {mcpModalOpen && (
+        <div className="mcp-modal-backdrop" onClick={() => setMcpModalOpen(false)}>
+          <div className="mcp-modal-dialog" onClick={e => e.stopPropagation()}>
+            <div className="mcp-modal-header">
+              <h2>
+                <span role="img" aria-label="key">🔑</span> VS Code MCP Configuration
+              </h2>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span className="mcp-badge">User: {username}</span>
+                <button
+                  className="mcp-modal-close"
+                  onClick={() => setMcpModalOpen(false)}
+                  title="Close"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            <div className="mcp-modal-body">
+              {mcpLoading ? (
+                <div style={{ textAlign: 'center', padding: '40px 0', color: '#666' }}>
+                  <span className="mcb-spinner" style={{ width: 24, height: 24, borderWidth: 3, borderColor: '#00ED64', borderRightColor: 'transparent' }} />
+                  <div style={{ marginTop: 12 }}>Loading MCP credentials for {username}…</div>
+                </div>
+              ) : mcpError ? (
+                <div style={{ color: '#c0392b', background: '#fff0f0', border: '1px solid #f0c0bb', borderRadius: 8, padding: '12px 16px', marginBottom: 12 }}>
+                  ❌ {mcpError}
+                </div>
+              ) : mcpConfigData ? (
+                <>
+                  <p style={{ margin: '0 0 14px', color: '#555', lineHeight: 1.5 }}>
+                    Copy this configuration into your workspace <code>.vscode/mcp.json</code> or VS Code settings to connect GitHub Copilot / VS Code MCP clients directly to this MongoDB server:
+                  </p>
+
+                  {/* VS Code Config JSON */}
+                  <div className="mcp-section">
+                    <div className="mcp-section-header">
+                      <span className="mcp-section-title">VS Code Configuration (<code>.vscode/mcp.json</code>)</span>
+                      <button
+                        className={`mcp-copy-button ${copiedConfig ? 'copied' : ''}`}
+                        onClick={() => copyToClipboard(mcpConfigData.vscode_config_json, 'config')}
+                        title="Copy configuration JSON"
+                      >
+                        {copiedConfig ? '✅ Copied!' : '📋 Copy Config'}
+                      </button>
+                    </div>
+                    <div className="mcp-code-container">
+                      <pre className="mcp-code-block">{mcpConfigData.vscode_config_json}</pre>
+                    </div>
+                  </div>
+
+                  {/* Bearer Token */}
+                  <div className="mcp-section">
+                    <div className="mcp-section-header">
+                      <span className="mcp-section-title">Bearer JWT Token</span>
+                      <button
+                        className={`mcp-copy-button ${copiedToken ? 'copied' : ''}`}
+                        onClick={() => copyToClipboard(mcpConfigData.token, 'token')}
+                        title="Copy raw JWT token"
+                      >
+                        {copiedToken ? '✅ Copied!' : '📋 Copy Token'}
+                      </button>
+                    </div>
+                    <pre className="mcp-token-block">{mcpConfigData.token}</pre>
+                  </div>
+
+                  {/* Metadata info row */}
+                  <div className="mcp-info-row">
+                    <div className="mcp-info-item">
+                      <span className="mcp-info-label">Server Root</span>
+                      <span className="mcp-info-value">{mcpConfigData.mcp_root}</span>
+                    </div>
+                    <div className="mcp-info-item">
+                      <span className="mcp-info-label">Endpoints ({mcpConfigData.endpoints?.length || 0})</span>
+                      <span className="mcp-info-value">{mcpConfigData.endpoints?.join(', ')}</span>
+                    </div>
+                    <div className="mcp-info-item">
+                      <span className="mcp-info-label">Scopes</span>
+                      <span className="mcp-info-value">{Array.isArray(mcpConfigData.scope) ? mcpConfigData.scope.join(', ') : String(mcpConfigData.scope)}</span>
+                    </div>
+                  </div>
+                </>
+              ) : null}
+            </div>
+
+            <div className="mcp-modal-footer">
+              <button
+                className="btn-secondary"
+                onClick={() => fetchMcpConfig(true)}
+                disabled={mcpLoading || regeneratingToken}
+                title="Generate a new token for this user (replaces existing key in MongoDB)"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#c0392b', borderColor: '#f0c0bb' }}
+              >
+                {regeneratingToken && <span className="mcb-spinner" aria-hidden="true" />}
+                {regeneratingToken ? 'Generating…' : '🔄 Generate New Token'}
+              </button>
+              <button
+                className="btn-secondary"
+                onClick={() => setMcpModalOpen(false)}
+                style={{ fontSize: 13, padding: '6px 16px' }}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
