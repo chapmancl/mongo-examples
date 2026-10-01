@@ -202,7 +202,7 @@ class MongoDBClient:
 
     async def ensure_connection(self):
         """Validate that this instance's persistent, pooled connection is open and reuse
-        it; (re)connect ONLY when it was never opened or was reset after a failure.
+    it; (re)connect ONLY when it was never opened or was reset after a failure.
 
         Fast path: once connected, ALL callers get the cached connect result immediately with
         NO network round-trip. Concurrent callers arriving during the initial connect wait on
@@ -247,7 +247,9 @@ class MongoDBClient:
         except Exception as e:
             ip_address = self.get_current_ip()
             logger.error(f"Failed to connect to MongoDB from ip: {ip_address}: {e}")
-            self._connection_initialized = False            
+            self._connection_initialized = False
+            self.client = {}
+            raise ConnectionError(f"Failed to connect to MongoDB from ip: {ip_address}: {e}") from e
         return ping_result
 
     def sync_connect_to_mongodb(self):

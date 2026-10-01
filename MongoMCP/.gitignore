@@ -9,6 +9,7 @@ lib64
 lib/
 include/
 bin/
+node_modules/
 pyvenv.cfg
 .python-version
 
@@ -22,3 +23,8 @@ node_modules/
 # Local configuration may contain credentials or tokens.
 local_settings.py
 webui/local_settings.py
+*.tfvars
+
+# Local environment configuration
+.env.local
+.env

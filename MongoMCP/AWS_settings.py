@@ -45,13 +45,27 @@ class AWSSettings:
         )
 
         # MongoDB config collection location (stores MCP tool definitions)
-        self.mcp_config_db = "mcp_config"
+        self.mcp_config_db = "ai_config"
         self.mcp_config_col = "mcp_tools"
-        self.memory_db = os.getenv('MEMORY_DB', 'mcp_config')
-
         # LLM model — Bedrock cross-region inference profile ID
         self.LLM_MODEL_ID = os.getenv('LLM_MODEL_ID', 'global.anthropic.claude-sonnet-4-6')
+        #self.LLM_MODEL_ID = "us.anthropic.claude-sonnet-4-20250514-v1:0"
+        #self.LLM_MODEL_ID = "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
+        self.mcp_tool_name = os.getenv('MCP_TOOL_NAME', 'AirbnbSearch')
+        self.transport = os.getenv('MCP_TRANSPORT', 'http')
+        self.host = os.getenv('SERVER_HOST', '0.0.0.0')
+        self.port = int(os.getenv('SERVER_PORT', '8000'))
+        # Initialize AWS Secrets Manager client
+        self._secrets_client = boto3.client(
+            'secretsmanager',
+            region_name=self.aws_region
+        )
+        
+        # Cache for credentials to avoid repeated API calls
+        self.memory_db = os.getenv('MEMORY_DB', 'mcp_config')
+
         self.LLM_MAX_ITERATIONS = int(os.getenv('LLM_MAX_ITERATIONS', '15'))
+        self.SAVE_LLM_HISTORY = os.getenv('SAVE_LLM_HISTORY', 'false').lower() in ['1', 'true', 'yes', 'on']
 
         self.ENABLE_CACHE_POINTS = os.getenv('ENABLE_CACHE_POINTS', 'true').lower() in ['1', 'true', 'yes', 'on']
         self.ENABLE_BEDROCK_CACHING = True

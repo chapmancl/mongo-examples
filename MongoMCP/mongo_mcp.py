@@ -8,23 +8,39 @@ from typing import Any, Dict, List, Optional, Annotated
 import logging
 from pydantic import Field
 import fastmcp
-import mcp.types as mt
 from fastmcp import FastMCP
 from fastapi import FastAPI, Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastmcp.server.dependencies import AccessToken
 from starlette.responses import JSONResponse
-from local_settings import settings # change this to use AWS_settings
 from mongomcp import MongoDBQueryServer, MongoMCPMiddleware, ServerBedrockClient, MongoTokenVerifier, register_memory_tools, register_query_tools, get_memory_bedrock_toolspecs, register_agent_tools, get_agent_bedrock_toolspecs, __version__ as MCP_VERSION
 from mongomcp.mongodb_client import query_capture_cv as _mongo_capture_cv, _query_capture_registry as _mongo_capture_registry, set_query_capture_enabled as _set_query_capture_enabled, _CAPTURE_LISTENER as _mongo_capture_listener
 from mongomcp.agent.prompt_agent import PromptAgent
 from mongomcp.agent.tool_router import ToolRouter
+from starlette.types import ASGIApp, Receive, Scope, Send
+import mcp.types as mt
 import traceback
 import os
 import sys
 import time
 import uuid
 
+USE_LOCAL_MODE = os.getenv('USE_LOCAL_MODE', 'false').lower() == "true"
+
+if USE_LOCAL_MODE:
+    # Start with : > fastapi run mongo_mcp.py --port 8001
+    print("# ------ Running in local mode ------ #")
+    from local_settings import settings
+else:
+    # Running with kubernetes in EKS/Fargate
+    from AWS_settings import settings
+
+from mongomcp import MongoDBQueryServer, MongoMCPMiddleware, ServerBedrockClient, MongoTokenVerifier, register_memory_tools, register_query_tools, get_memory_bedrock_toolspecs, register_agent_tools, get_agent_bedrock_toolspecs, __version__ as MCP_VERSION
+from mongomcp.mongodb_client import query_capture_cv as _mongo_capture_cv, _query_capture_registry as _mongo_capture_registry, set_query_capture_enabled as _set_query_capture_enabled, _CAPTURE_LISTENER as _mongo_capture_listener
+from mongomcp.agent.prompt_agent import PromptAgent
+from mongomcp.agent.tool_router import ToolRouter
+
+logging.basicConfig(level=logging.info)
 # logs were getting very bloated, lets reduce that a bit.
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
@@ -55,6 +71,7 @@ main component flow:
 
 """
 
+TOOL_NAME = settings.mcp_tool_name
 mongo_middleware: MongoMCPMiddleware
 mongo_server: MongoDBQueryServer
 auth_provider = None
@@ -393,7 +410,7 @@ async def aggregate_query(
         return {"error":f"Unexpected error executing aggregate_query: {str(e)}"}
 
 
-#***********  BEGIN FASTAPI SECTION  ***************
+# ----------------------- BEGIN FASTAPI SECTION ----------------------- #
 
 # We have our tools, mount the mcp to fastapi and setup our fastapi authentication
 # everything after this should be FastAPI endpoints.
@@ -433,6 +450,7 @@ def get_request_id(request: Request) -> str:
     return request_id
 
 def verify_token(credentials: HTTPAuthorizationCredentials) -> Any:
+    #print("mongomcp: verify_token")
     (allowed, agent_rec) = mongo_middleware.check_authorization(credentials.credentials)
     if not allowed:
         raise HTTPException(
@@ -734,7 +752,7 @@ async def invoke_llm(prompt_name: str, body: Dict[str, Any],
             # accepts a per-call tool callback parameter.
             llm_client.mcp_call = scoped_mcp_call
 
-            resp_obj = await llm_client.invoke_bedrock_with_tools(
+            resp_obj = await llm_client.invoke_client_with_tools(
                 prompt=prompt,
                 context=json.dumps(context),
             )
@@ -919,6 +937,104 @@ async def vectorize_text(body: Dict[str, Any],
         }
 
 
+@app.post("/llm_history/save")
+async def save_llm_history(
+    body: Dict[str, Any],
+    token: Annotated[str, Depends(get_token)]
+) -> Dict[str, Any]:
+    """
+    Save LLM conversation history to MongoDB llm_history collection.
+
+    Body parameters:
+        username (str): Username of the user
+        prompt (str): The prompt/question sent to the LLM
+        response (str): The LLM's response
+        tool_name (str, optional): Name of the tool/service (default: settings.TOOL_NAME)
+        prompt_name (str, optional): Name of the specific prompt (default: "user_query")
+        metadata (dict, optional): Additional metadata to store
+
+    Returns:
+        dict: {"status": "success", "id": "<document_id>"} or {"status": "error", "error": "<message>"}
+    """
+    try:
+        # Extract required fields
+        username = body.get("username")
+        prompt = body.get("prompt")
+        response = body.get("response")
+
+        if not username:
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "error": "username is required"}
+            )
+
+        if not prompt:
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "error": "prompt is required"}
+            )
+
+        if not response:
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "error": "response is required"}
+            )
+
+        # Extract optional fields
+        tool_name = body.get("tool_name", settings.TOOL_NAME)
+        prompt_name = body.get("prompt_name", "user_query")
+        metadata = body.get("metadata", {})
+
+        # Build conversation data
+        conversation_data = {
+            "username": username,
+            "prompt": prompt,
+            "response": response,
+            "metadata": metadata
+        }
+
+        # Use agent_id from token if available, otherwise use username
+        agent_id = token.get("agent_name", username)
+
+        # Save to MongoDB using middleware
+        doc_id = mongo_middleware.save_llm_conversation(
+            conversation_data=conversation_data,
+            agent_id=agent_id,
+            tool_name=tool_name,
+            prompt_name=prompt_name
+        )
+
+        if doc_id:
+            logger.info(f"LLM history saved for user: {username}, id: {doc_id}")
+            return {
+                "status": "success",
+                "id": doc_id,
+                "username": username,
+                "tool_name": tool_name,
+                "prompt_name": prompt_name
+            }
+        else:
+            logger.error("Failed to save LLM history to MongoDB")
+            return JSONResponse(
+                status_code=500,
+                content={"status": "error", "error": "Failed to save to database"}
+            )
+
+    except HTTPException as he:
+        logger.error(f"Authorization failed: {he.detail}")
+        return JSONResponse(
+            status_code=he.status_code,
+            content={"status": "error", "error": he.detail}
+        )
+    except Exception as e:
+        logger.error(f"Error saving LLM history: {e}")
+        logger.debug("".join(traceback.format_exception(None, e, e.__traceback__)))
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "error": str(e)}
+        )
+
+
 # now that all the other API endpoints are established, lets add our mcp routes to the fastapi app.
 app.mount(f"/{settings.TOOL_NAME}", mcp_app)
 app.mount("/memory", memory_app)
@@ -937,7 +1053,7 @@ def main():
     """
     #mcp.run(transport="sse", host="0.0.0.0", port=8001)
     #mcp.run(transport="sse",  port=8001) # this is for local IDE/Cline integration
-    mcp.run(transport="http", host="0.0.0.0", port=8000) # this is for AWS containers  
+    mcp.run(transport=settings.transport, host=settings.host, port=settings.port) # this is for AWS containers  
 
 
 if __name__ == "__main__":

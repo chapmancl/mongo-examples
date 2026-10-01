@@ -36,6 +36,7 @@ class DocumentVectorizer:
                 "collection": target_collection,
             }
         )
+        print(f"Connecting to: {settings.mongo_url()}")
         self.mongo_client.sync_connect_to_mongodb()
         self.is_voyage_embedding = settings.EMBEDDING_MODEL_ID.startswith("voyage-")
         self.source_collection = self.mongo_client.get_collection(target_collection)

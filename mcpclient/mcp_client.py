@@ -109,7 +109,7 @@ class CachedQueryProcessor:
         input_hash = hashlib.md5(sorted_input.encode()).hexdigest()
         return f"{tool_name}:{input_hash}"
 
-    def invoke_bedrock_with_tools(self, prompt: str, max_iterations=10) -> str:
+    def invoke_client_with_tools(self, prompt: str, max_iterations=10) -> str:
         """
         Invoke Bedrock with MCP tools support and caching enabled
 
@@ -225,7 +225,7 @@ class CachedQueryProcessor:
                 else:
                     return f"Error: {error.response['Error']['Message']}"
             except Exception as e:
-                print(f"Unexpected error in invoke_bedrock_with_tools: {e}")
+                print(f"Unexpected error in invoke_client_with_tools: {e}")
                 return f"Error: {str(e)}"
 
         self.history = messages
@@ -583,7 +583,7 @@ class CachedQueryProcessor:
             self.history = []
 
         # Invoke Bedrock with MCP tools and caching
-        assistant_message = self.invoke_bedrock_with_tools(question)
+        assistant_message = self.invoke_client_with_tools(question)
         return assistant_message, self.history
 
     def invalidate_cache_for_collection(self, collection_name: str):

@@ -42,7 +42,7 @@ def register_memory_tools(mcp, db_client, llm_client, settings) -> Dict[str, Any
     ----------
     mcp       : FastMCP instance (already configured with auth)
     db_client : MongoDBClient — motor client used to reach memory collections
-    llm_client: BedrockClient — used for generate_embedding and invoke_bedrock_text
+    llm_client: BedrockClient — used for generate_embedding and invoke_converse_text
     settings  : AWSSettings / LocalSettings — must have .memory_db attribute
 
     Returns

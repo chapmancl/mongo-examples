@@ -95,8 +95,10 @@ def get_or_create_agent_identity_and_token(
 def _load_settings(use_aws: bool):
     if use_aws:
         from AWS_settings import settings
+        print("Using AWS settings")
     else:
         from local_settings import settings
+        print("Using local_settings")
     return settings
 
 

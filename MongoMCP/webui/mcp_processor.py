@@ -1,3 +1,5 @@
+import sys
+import os
 import asyncio
 import json
 import os
@@ -8,7 +10,6 @@ import traceback
 from typing import Any, List, Optional
 
 import fastmcp
-import mcp.types as mt
 import requests
 from pydantic import BaseModel
 
@@ -19,6 +20,17 @@ from mongomcp.agent.webui_bedrock_client import WebUiBedrockClient
 import conversation_checkpoint as ckpt
 
 import logging
+
+USE_LOCAL_MODE = os.getenv('USE_LOCAL_MODE', 'false').lower() == "true"
+
+if USE_LOCAL_MODE:
+    # Start with : > fastapi run mongo_mcp.py --port 8001
+    print("# ------ Running in local mode ------ #")
+    from local_settings import settings
+else:
+    # Running with kubernetes in EKS/Fargate
+    from AWS_settings import settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -996,7 +1008,7 @@ class APIQueryProcessor:
             # stub + any domains already activated earlier in this conversation).
             self._apply_active_tools(self._current_session_id)
             try:
-                return await self.llm_client.invoke_bedrock_with_tools_text(messages=msgs)
+                return await self.llm_client.invoke_client_with_tools_text(messages=msgs)
             finally:
                 # Close any per-turn pooled MCP sessions opened on this loop (turn mode only;
                 # no-op otherwise) so sessions don't leak across turns.

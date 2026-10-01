@@ -48,6 +48,7 @@ class AWSSettings:
 
         # URL of the MCP server (mongo_mcp.py or deployed service)
         self.mongo_mcp_root = os.getenv('MONGO_MCP_ROOT', 'http://localhost:8000')
+        self.SAVE_LLM_HISTORY = os.getenv('SAVE_LLM_HISTORY', 'false').lower() in ['1', 'true', 'yes', 'on']
 
         # System prompt injected into every Bedrock conversation
         self.BEDROCK_SYSTEM_PROMPT_TEXTS = [
