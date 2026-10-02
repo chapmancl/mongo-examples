@@ -30,6 +30,7 @@ Anthropic → Bedrock response translation:
 """
 
 import logging
+from http.client import RemoteDisconnected
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -297,13 +298,24 @@ class GroveConverseClient:
         url = f"{self.base_url}/anthropic/v1/messages"
         logger.debug("Grove POST %s model=%s", url, modelId)
 
-        response = self._session.post(
-            url,
-            json=body,
-            headers=self._headers(),
-            verify=self.verify,
-            timeout=self.timeout,
-        )
+        request_kwargs = {
+            "json": body,
+            "headers": self._headers(),
+            "verify": self.verify,
+            "timeout": self.timeout,
+        }
+        try:
+            response = self._session.post(url, **request_kwargs)
+        except requests.exceptions.ConnectionError as exc:
+            disconnected = any(
+                isinstance(part, RemoteDisconnected)
+                for reason in exc.args
+                for part in (reason.args if isinstance(reason, BaseException) else (reason,))
+            )
+            if not disconnected:
+                raise
+            logger.warning("Grove closed the HTTP connection without a response; retrying once on a fresh connection")
+            response = requests.post(url, **request_kwargs)
         if not response.ok:
             raise RuntimeError(
                 f"Grove call failed [{response.status_code}] "

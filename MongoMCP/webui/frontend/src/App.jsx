@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react'
 import ChatMessage from './ChatMessage'
+import { scrollCompletedResponse } from './responseScroll.mjs'
 
 const API_URL = import.meta.env.VITE_API_URL || ''
 
@@ -171,9 +172,12 @@ export default function App() {
   const modelId = import.meta.env.VITE_LLM_MODEL_ID || ''
 
   const lastQuestionRef = useRef('')
+  const submittingRef = useRef(false)
+  const quickRepliesRef = useRef([])
   const autoGreetingFiredRef = useRef(false)
-  const liveLogRef = useRef(null)
   const chatBodyRef = useRef(null)
+  const latestResponseRef = useRef(null)
+  const responseSpacerRef = useRef(null)
 
   const frozenReasoningRef = useRef([])  // steps for the current in-flight turn
   const currentMapDataRef = useRef(null) // in-flight map data (avoids stale effect closure)
@@ -187,16 +191,12 @@ export default function App() {
   const clearHistoryRef = useRef(false)
 
   useEffect(() => {
-    if (chatBodyRef.current) {
-      chatBodyRef.current.scrollTop = chatBodyRef.current.scrollHeight
+    if (!transcript.length) {
+      if (responseSpacerRef.current) responseSpacerRef.current.style.height = '0px'
+      return
     }
-  }, [transcript, streamedOutput, loading])
-
-  useEffect(() => {
-    if (liveLogRef.current) {
-      liveLogRef.current.scrollTop = liveLogRef.current.scrollHeight
-    }
-  }, [streamedOutput])
+    scrollCompletedResponse(chatBodyRef.current, latestResponseRef.current, responseSpacerRef.current)
+  }, [transcript])
 
   // Resolve the verified identity BEFORE the auto-greeting so the greeting (and the
   // username the LLM sees) uses the verified email rather than the default
@@ -287,6 +287,7 @@ export default function App() {
       if (jd && typeof jd === 'object') { currentMapDataRef.current = jd; setMapData(jd) }
       // Authoritative final answer for the answer bubble (survives history trimming).
       if (typeof content.text === 'string' && content.text.trim()) finalAnswerTextRef.current = content.text
+      if (Array.isArray(content.quick_replies)) quickRepliesRef.current = content.quick_replies
       if (content.tool_timings && typeof content.tool_timings === 'object') {
         toolTimingsRef.current = { ...toolTimingsRef.current, ...content.tool_timings }
       }
@@ -358,6 +359,7 @@ export default function App() {
       id: prev.length,
       userText,
       assistantText: finalText || null,
+      quickReplies: quickRepliesRef.current,
       toolCalls,
       reasoningSteps: [...frozenReasoningRef.current],
       mapData: currentMapDataRef.current,
@@ -365,7 +367,10 @@ export default function App() {
   }
 
   async function submitQuestion(overrideInput, historyOverride, sessionOverride) {
+    if (submittingRef.current) return
     const inputToSend = overrideInput !== undefined ? String(overrideInput) : question
+    if (!inputToSend.trim()) return
+    submittingRef.current = true
     const historyToSend = historyOverride !== undefined ? historyOverride : history
     const sessionToSend = sessionOverride !== undefined ? sessionOverride : sessionId
     lastQuestionRef.current = inputToSend
@@ -382,6 +387,7 @@ export default function App() {
     currentMapDataRef.current = null
     finalHistoryRef.current = null
     finalAnswerTextRef.current = ''
+    quickRepliesRef.current = []
     toolTimingsRef.current = {}
     clearHistoryRef.current = false
     setMapData(null)
@@ -434,6 +440,7 @@ export default function App() {
         setHistory(data.history || history)
         finalHistoryRef.current = data.history || history
         const c = data.content
+        if (c && Array.isArray(c.quick_replies)) quickRepliesRef.current = c.quick_replies
         if (c && typeof c === 'object' && typeof c.text === 'string' && c.text.trim()) {
           finalAnswerTextRef.current = c.text
         }
@@ -450,6 +457,7 @@ export default function App() {
     } catch (e) {
       setError(String(e))
     } finally {
+      submittingRef.current = false
       setLoading(false)
       setPendingQuestion(null)
     }
@@ -652,9 +660,13 @@ export default function App() {
               key={turn.id}
               userText={isGreeting(turn) ? null : turn.userText}
               assistantText={turn.assistantText}
+              quickReplies={turn.quickReplies || []}
+              repliesDisabled={loading || stageSwitching}
+              onQuickReply={value => submitQuestion(value)}
               toolCalls={turn.toolCalls}
               reasoningSteps={turn.reasoningSteps || []}
               mapData={turn.mapData || (isLast && !loading ? mapData : null)}
+              responseRef={isLast ? latestResponseRef : undefined}
               isStreaming={false}
               modelId={modelId}
             />
@@ -681,7 +693,7 @@ export default function App() {
                 <div className="streaming-bubble">
                   {status && <div className="status-badge">{status}</div>}
                   {streamedOutput
-                    ? <pre ref={liveLogRef} style={{ margin: 0, whiteSpace: 'pre-wrap', fontSize: 12, maxHeight: 200, overflow: 'auto' }}>{streamedOutput}</pre>
+                    ? <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontSize: 12, maxHeight: 200, overflow: 'auto' }}>{streamedOutput}</pre>
                     : <span style={{ color: '#aaa', fontSize: 13 }}>⏳ Processing...</span>
                   }
                 </div>
@@ -695,6 +707,7 @@ export default function App() {
             ❌ {error}
           </div>
         )}
+        <div ref={responseSpacerRef} aria-hidden="true" />
       </main>
 
       {/* Footer */}

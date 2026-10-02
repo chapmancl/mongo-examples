@@ -98,6 +98,7 @@ class APIQueryProcessor:
             self._checkpoint_ids: dict = {}
             # Per-session completed-turn counter driving the checkpoint write cadence.
             self._checkpoint_turn_count: dict = {}
+            self._session_context_blocks: dict = {}
             # Opt-in cross-turn MCP session reuse (MCP_SESSION_POOL=1). Sessions live on a
             # dedicated background event loop thread so they persist for the life of the
             # process (each turn otherwise runs on its own short-lived asyncio.run loop).
@@ -183,6 +184,43 @@ class APIQueryProcessor:
     # ------------------------------------------------------------------
     # Tool discovery
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _extract_quick_replies(answer):
+        if not isinstance(answer, str):
+            return answer, []
+        text, marker, block = answer.rpartition("\n```quick-replies\n")
+        if not marker or not block.rstrip().endswith("```") or not text.strip():
+            return answer, []
+        try:
+            options = json.loads(block.rstrip()[:-3].strip())
+        except (ValueError, TypeError):
+            return answer, []
+        if not isinstance(options, list) or not 1 <= len(options) <= 24:
+            return answer, []
+        replies = []
+        reply_ids = set()
+        for option in options:
+            if not isinstance(option, dict):
+                return answer, []
+            label, value = option.get("label"), option.get("value")
+            if (not isinstance(label, str) or not isinstance(value, str)
+                    or not 1 <= len(label.strip()) <= 80
+                    or not 1 <= len(value.strip()) <= 500):
+                return answer, []
+            reply = {"label": label.strip(), "value": value.strip()}
+            if "id" in option:
+                reply_id = option["id"]
+                if (not isinstance(reply_id, str) or not 1 <= len(reply_id) <= 64
+                        or any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+                               for character in reply_id)
+                        or reply_id in reply_ids):
+                    return answer, []
+                reply["id"] = reply_id
+                reply_ids.add(reply_id)
+            if "id" in reply or reply["value"] not in {item["value"] for item in replies}:
+                replies.append(reply)
+        return text.rstrip(), replies
 
     def _discover_tools(self, emit=None):
         asyncio.run(self._discover_tools_async(emit=emit))
@@ -327,6 +365,42 @@ class APIQueryProcessor:
             "with memory_types=[\"conversation\"] and a short query describing the topic. "
             "These are excluded from normal recall, so you must request the type explicitly. "
             "Results are already scoped to the current browser."
+        })
+
+        system_prompt.append({"text":
+            'Clickable replies (webui): available in any response. Use this exact '
+            'output format for useful answer choices, next steps, or prompts to try.\n'
+            'BEGIN FORMAT EXAMPLE\n'
+            'How much detail would you like?\n\n'
+            '- A brief summary: {{reply:brief}}\n'
+            '- A detailed explanation: {{reply:detailed}}\n\n'
+            '```quick-replies\n'
+            '[\n'
+            '  {"id":"brief","label":"Brief summary","value":"Give me a brief summary of the topic we are discussing."},\n'
+            '  {"id":"detailed","label":"Detailed explanation","value":"Give me a detailed explanation of the topic we are discussing."}\n'
+            ']\n'
+            '```\n'
+            'END FORMAT EXAMPLE\n\n'
+            'Rules:\n'
+            '- The example demonstrates syntax only. Generate your own relevant '
+            'choices from the current conversation and active strategy; do not '
+            'reuse the example choices unless actually relevant.\n'
+            '- Output ordinary Markdown, then exactly one quick-replies fenced '
+            'JSON block at the very end. Nothing follows its closing fence. Do not '
+            'include the BEGIN/END delimiters or wrap the whole answer in a code block.\n'
+            '- Put {{reply:ID}} beside its description. ID must exactly match an '
+            'object id in the JSON. Never put markers inside code or Markdown links.\n'
+            '- Each object has id, label, value. Use unique ids of 1-64 ASCII '
+            'letters/digits/underscores/hyphens, labels of 1-80 characters, values '
+            'of 1-500 characters, and 1-24 objects. JSON uses double quotes, no '
+            'comments, and no trailing commas.\n'
+            '- label is the visible button text. value is the ordinary user '
+            'message sent when clicked, not code or automatic authorization. '
+            'For example prompts, value is the exact full prompt. For answer '
+            'choices, value identifies both the question and selected answer.\n'
+            '- If no useful choices exist, output only normal Markdown without '
+            'markers or a quick-replies block. Free-text replies remain available. '
+            'Never solicit credentials or sensitive information through buttons.'
         })
 
         self._base_system_prompt = system_prompt
@@ -840,7 +914,7 @@ class APIQueryProcessor:
     MAX_HISTORY_MSGS = 20      # hard cap on message count
     CHECKPOINT_TURN_CADENCE = 2  # write the checkpoint every Nth completed turn
 
-    async def _prefetch_session_context(self, username: str) -> str:
+    async def _prefetch_session_context(self, username: str, session_id: str = "") -> dict:
         """Pre-fetch recent sessions and user preferences before the first LLM turn.
 
         Runs two parallel MCP tool calls and returns a formatted Markdown block
@@ -850,6 +924,8 @@ class APIQueryProcessor:
         fetched_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         sessions_text = ""
         prefs_text = ""
+        has_sessions = None
+        has_preferences = None
         try:
             sessions_res, prefs_res = await asyncio.gather(
                 self._call_mcp_tool("memory_list_sessions", {"filter": {"username": username}, "limit": 5}),
@@ -865,29 +941,47 @@ class APIQueryProcessor:
                 try:
                     data = json.loads(sessions_res) if isinstance(sessions_res, str) else sessions_res
                     sessions = (data or {}).get("sessions", (data or {}).get("results", []))
+                    if isinstance(sessions, list) and "error" not in (data or {}):
+                        sessions = [session for session in sessions if session.get("session_id") != session_id]
+                        has_sessions = bool(sessions)
                     n = len(sessions or [])
-                    if n:
+                    if has_sessions:
+                        recent = sessions[0]
                         sessions_text = (
                             "### Prior Session Availability\n"
                             f"- This is a RETURNING user with at least {n} prior session(s). "
-                            "Full recaps are NOT preloaded. If the user references earlier work "
+                            f"Most recent: session_id={recent.get('session_id')}, "
+                            f"last_updated_at={recent.get('last_updated_at')}, "
+                            f"last_memory_type={recent.get('last_memory_type')}. "
+                            "This is metadata, not a recap. If the user references earlier work "
                             "('what were we doing', 'go back to…'), fetch on demand via "
                             "memory_list_sessions or memory_recall(memory_types=[\"conversation\"], "
                             "query=…). Otherwise do not load them."
                         )
-                    else:
+                    elif has_sessions is False:
                         sessions_text = (
                             "### Prior Session Availability\n"
-                            "- No prior sessions found — treat this as a NEW user."
+                            "- No prior sessions found."
                         )
                 except Exception:
                     pass
             if not isinstance(prefs_res, Exception):
                 try:
                     data = json.loads(prefs_res) if isinstance(prefs_res, str) else prefs_res
-                    prefs = (data or {}).get("results", [])
+                    prefs = [
+                        pref for pref in (data or {}).get("results", [])
+                        if pref.get("memory_type") == "user_preference"
+                        and pref.get("username") == username
+                    ]
+                    if isinstance((data or {}).get("results"), list) and "error" not in (data or {}):
+                        has_preferences = bool(prefs)
                     if prefs:
-                        lines = [f"- {p.get('content', '')[:150]}" for p in prefs[:5]]
+                        lines = [
+                            f"- {pref.get('content', '')[:1000]}"
+                            + (f" [preview only; load memory {pref.get('id')} for full text]"
+                               if len(pref.get('content', '')) > 1000 else "")
+                            for pref in prefs[:5]
+                        ]
                         prefs_text = "### User Preferences\n" + "\n".join(lines)
                 except Exception:
                     pass
@@ -895,7 +989,7 @@ class APIQueryProcessor:
             logger.warning("Session pre-fetch error: %s", exc)
         header = (
             f"## Pre-loaded Session Context\n"
-            f"**context_loaded:** true  \n"
+            f"**context_loaded:** {str(has_sessions is not None and has_preferences is not None).lower()}  \n"
             f"**username:** {username}  \n"
             f"**fetched_at:** {fetched_at}"
         )
@@ -904,9 +998,29 @@ class APIQueryProcessor:
             sections.append(sessions_text)
         if prefs_text:
             sections.append(prefs_text)
-        if len(sections) == 1:
-            sections.append("*(no prior session data found)*")
-        return "\n\n".join(sections)
+        if has_sessions is None or has_preferences is None:
+            sections.append(
+                "*(Session or preference lookup failed; prior memories are unknown. "
+                "Offer the welcome by default, but do not claim there are no prior memories.)*"
+            )
+        is_new_user = not (has_sessions or has_preferences)
+        return {"text": "\n\n".join(sections), "is_new_user": is_new_user}
+
+    async def _session_context_for(self, username: str, user_id: str, session_id: str) -> dict:
+        key = (user_id, username, session_id)
+        block = self._session_context_blocks.get(key)
+        if block is None:
+            block = await self._prefetch_session_context(username, session_id)
+            if len(self._session_context_blocks) >= 128:
+                self._session_context_blocks.pop(next(iter(self._session_context_blocks)))
+            self._session_context_blocks[key] = block
+        return block
+
+    async def _welcome_strategy_text(self) -> str:
+        raw = await self._call_mcp_tool("memory_strategy_recall", {"name": "new_user_welcome"})
+        data = json.loads(raw) if isinstance(raw, str) else raw
+        strategies = (data or {}).get("strategies") or (data or {}).get("results", [])
+        return strategies[0].get("content", "") if strategies else ""
 
     def _service_agent_name(self) -> str:
         """The agent_name the webui presents to the MCP/memory backend, decoded from
@@ -960,20 +1074,22 @@ class APIQueryProcessor:
             self._discover_tools(emit=emit_fn)
 
         _ctx_block: Optional[str] = None
-        _ctx_prefetched = False
-
+        welcome_checked = False
+        welcome_text = ""
         async def _invoke():
-            nonlocal _ctx_block, _ctx_prefetched
-            # Once per conversation: pre-fetch user context on the first message.
+            nonlocal _ctx_block, welcome_checked, welcome_text
+            # Reuse the first-turn prefetch after the auto-greeting, including on later turns.
             prefetch_name = request.username or request.user_id
-            if is_new_session and prefetch_name and not _ctx_prefetched:
+            context_record = None
+            if prefetch_name and (is_new_session or request.session_id):
                 try:
-                    _ctx_block = await self._prefetch_session_context(prefetch_name)
-                    logger.info("Session context pre-fetched for user=%s (%d chars)", prefetch_name, len(_ctx_block))
+                    context_record = await self._session_context_for(
+                        prefetch_name, request.user_id or "", request.session_id or "",
+                    )
+                    _ctx_block = context_record["text"]
                 except Exception as exc:
                     logger.warning("Session pre-fetch failed: %s", exc)
                     _ctx_block = "## Pre-loaded Session Context\n**context_loaded:** false"
-                _ctx_prefetched = True
 
             effective_system = list(self._base_system_prompt)
             if effective_system and getattr(self.llm_client.settings, "LLM_PROVIDER", "bedrock").lower() == "grove":
@@ -999,10 +1115,26 @@ class APIQueryProcessor:
             # Only when resuming (new/empty history — e.g. after a page refresh that
             # minted an empty round-trip) or when this process has checkpointed this
             # session before, so short conversations don't pay a per-turn fetch.
+            _ckpt_block = None
             if request.session_id and (is_new_session or request.session_id in self._checkpoint_ids):
                 _ckpt_block = await self._load_checkpoint(request.session_id)
                 if _ckpt_block:
                     effective_system.append({"text": _ckpt_block})
+            if (is_new_session and request.input.startswith("Hi, my username is")
+                    and not _ckpt_block and (context_record is None or context_record["is_new_user"])):
+                if not welcome_checked:
+                    welcome_checked = True
+                    try:
+                        welcome_text = await self._welcome_strategy_text()
+                    except Exception as exc:
+                        logger.warning("New-user welcome lookup failed: %s", exc)
+                effective_system.append({"text": (
+                    f"This is the first greeting for {_uname}. Offer the new-user welcome even if "
+                    "prior memories could not be checked. Do not claim there are no prior memories "
+                    "unless the pre-loaded context confirms it. The new_user_welcome strategy "
+                    "is attached below; use it directly without calling memory_strategy_recall again.\n\n"
+                    + (welcome_text or "Offer a quick tour, memory workflow, or MongoDB knowledge overview.")
+                )})
             self.llm_client.system = effective_system
             # UI-authoritative function stage: gunicorn runs multiple workers, each with its
             # own _function_stage. The UI sends the stage it is displaying on every query, so
@@ -1087,6 +1219,7 @@ class APIQueryProcessor:
         # Fold the just-completed turn — including the assistant's answer — into the
         # session checkpoint. Fires after the response so the current answer is
         # recorded now, not lagged to the next user submission.
+        content["text"], content["quick_replies"] = self._extract_quick_replies(content["text"])
         self._checkpoint_current_turn(request, updated_history)
         return QueryResponse(
             status="Query Completed", message="Completed",

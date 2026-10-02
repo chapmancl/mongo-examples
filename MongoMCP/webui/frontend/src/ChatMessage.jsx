@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import ExpandableTile from './ExpandableTile'
 import JsonDataRenderer from './JsonDataRenderer'
+import { remarkQuickReplies } from './inlineReplies.mjs'
 
 /**
  * Renders one conversation turn: user bubble + AI bubble + detail tiles.
@@ -163,9 +164,13 @@ function friendlyModelName(modelId) {
 export default function ChatMessage({
   userText,
   assistantText,
+  quickReplies = [],
+  repliesDisabled = false,
+  onQuickReply,
   toolCalls = [],
   reasoningSteps = [],
   mapData = null,
+  responseRef,
   isStreaming = false,
   modelId = '',
 }) {
@@ -197,15 +202,29 @@ export default function ChatMessage({
       )}
 
       {/* AI bubble */}
-      {(assistantText || isStreaming) && (
+      {(assistantText || isStreaming || hasMap) && (
         <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
-          <div style={{ maxWidth: '85%' }}>
+          <div style={{ maxWidth: '85%', width: hasMap ? '100%' : undefined, minWidth: 0 }}>
             {/* Avatar + name */}
             <div style={{ fontSize: 11, color: '#888', marginBottom: 4, marginLeft: 2 }}>
               <span style={{ fontWeight: 600, color: '#00684A' }}>● {friendlyModelName(modelId)}</span>
             </div>
 
-            <div style={{
+            {hasMap && (
+              <div className="response-widget" ref={responseRef}>
+                <div className="response-widget-content">
+                  <JsonDataRenderer jsonData={mapData} />
+                </div>
+                {assistantText && (
+                  <aside className="widget-scroll-cue" aria-hidden="true">
+                    <span className="widget-scroll-arrow">↓</span>
+                    <span>Scroll</span>
+                  </aside>
+                )}
+              </div>
+            )}
+
+            {(assistantText || isStreaming) && <div ref={!hasMap ? responseRef : undefined} style={{
               background: '#fff',
               border: '1px solid #e8f5ee',
               borderRadius: '4px 18px 18px 18px',
@@ -214,19 +233,37 @@ export default function ChatMessage({
             }}>
               {assistantText ? (
                 <div className="markdown-content" style={{ fontSize: 14, lineHeight: 1.6 }}>
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{assistantText}</ReactMarkdown>
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm, [remarkQuickReplies, { replies: isStreaming ? [] : quickReplies }]]}
+                    components={{
+                      a: ({ href, children, node, ...props }) => {
+                        const match = /^#quick-reply-(\d+)$/.exec(href || '')
+                        const replyIndex = node?.properties?.dataQuickReplyIndex
+                          ?? node?.properties?.['data-quick-reply-index']
+                        const reply = match && replyIndex !== undefined && Number(replyIndex) === Number(match[1])
+                          ? quickReplies[Number(match[1])] : null
+                        if (!reply) {
+                          return <a href={href} {...props}>{children}</a>
+                        }
+                        return (
+                          <button
+                            type="button"
+                            className="quick-reply"
+                            disabled={isStreaming || repliesDisabled || !onQuickReply}
+                            title={reply.value}
+                            onClick={() => onQuickReply(reply.value)}
+                          >
+                            {reply.label}
+                          </button>
+                        )
+                      },
+                    }}
+                  >{assistantText}</ReactMarkdown>
                 </div>
               ) : (
                 <div style={{ color: '#aaa', fontSize: 13 }}>⏳ Thinking...</div>
               )}
-            </div>
-
-            {/* Map data */}
-            {hasMap && (
-              <div style={{ marginTop: 8 }}>
-                <JsonDataRenderer jsonData={mapData} />
-              </div>
-            )}
+            </div>}
 
             {/* Tile chips row */}
             {!isStreaming && (hasTools || hasReasoning || hasMap) && (
