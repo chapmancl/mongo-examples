@@ -7,6 +7,9 @@ motor>=3.6
 pymongo>=4.10
 PyJWT>=2.8
 requests>=2.31
+voyageai
+python-dotenv
+
 
 # mongomcp[agent] optional dependencies (from mongomcp/pyproject.toml)
 flask

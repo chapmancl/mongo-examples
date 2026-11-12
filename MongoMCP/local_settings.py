@@ -1,5 +1,6 @@
 from typing import Dict, Optional
 import os
+from dotenv import load_dotenv
 import json
 
 # local_settings.py — MCP server (mongo_mcp.py) local development settings.
@@ -22,6 +23,10 @@ def _load_instructions() -> str:
 
 _MEMORY_AGENT_INSTRUCTIONS = _load_instructions()
 
+# BB - insure .env.local is loaded
+if os.path.isfile(".env.local"):
+    print("Loading environment variables from .env.local...")
+    load_dotenv(dotenv_path=".env.local") 
 
 class LocalSettings:
     def __init__(self):
@@ -56,9 +61,9 @@ class LocalSettings:
         self.VOYAGE_AI_KEY = os.getenv('VOYAGE_AI_KEY', 'your-voyage-api-key-here')
 
         # MongoDB config collection location
-        self.mcp_config_db = "ai_config"
+        self.mcp_config_db = os.getenv('MCP_CONFIG_DB', 'mcp_config')
         self.mcp_config_col = "mcp_tools"
-        self.memory_db = os.getenv('MEMORY_DB', 'mcp_config')
+        self.memory_db = os.getenv('MCP_CONFIG_DB', 'mcp_config')
 
 
         # Static auth token for the MCP server (generate via the MCP server's token endpoint)

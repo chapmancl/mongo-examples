@@ -62,7 +62,7 @@ class AWSSettings:
         )
         
         # Cache for credentials to avoid repeated API calls
-        self.memory_db = os.getenv('MEMORY_DB', 'mcp_config')
+        self.memory_db = os.getenv('MEMORY_DB', 'ai_config')
 
         self.LLM_MAX_ITERATIONS = int(os.getenv('LLM_MAX_ITERATIONS', '15'))
         self.SAVE_LLM_HISTORY = os.getenv('SAVE_LLM_HISTORY', 'false').lower() in ['1', 'true', 'yes', 'on']

@@ -1,6 +1,6 @@
 #FROM --platform=linux/arm64 python:3.11-slim
-#FROM python:3.13-slim
-FROM mcp-base:latest
+FROM python:3.13-slim
+#FROM mcp-base:latest
 
 # Set working directory
 WORKDIR /app
@@ -8,17 +8,22 @@ WORKDIR /app
 # ── Dependency layer (cached until requirements files change) ──────────────────
 #COPY requirements.txt .
 ARG CACHEBUST=1
+COPY requirements.base.txt requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 COPY mongomcp/ mongomcp/
 RUN pip install --no-cache ./mongomcp
-#RUN pip install --no-cache-dir -r requirements.txt
 
 # ── Application code (changes frequently, doesn't bust dep cache) ─────────────
 COPY agent_instructions.md .
-COPY AWS_settings.py .
+#COPY AWS_settings.py .
+COPY .env.local .
+COPY local_settings.py .
 COPY mongo_mcp.py .
-
 # Make the script executable
 #RUN chmod +x mongo_mcp.py
+# Move local env vars
+RUN export $(grep -v '^#' .env.local | grep -v '^$' | xargs)
+
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
