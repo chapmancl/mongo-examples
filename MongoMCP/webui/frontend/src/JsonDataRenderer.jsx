@@ -20,7 +20,7 @@ export default function JsonDataRenderer({ jsonData }) {
       }
 
       return (
-        <div style={{ padding: 12, background: '#f9f9f9', border: '1px solid #ddd', borderRadius: 4 }}>
+        <div style={{ padding: 12, background: '#022b3a', border: '1px solid #1c3a48', color: '#e6edf0', borderRadius: 4 }}>
           {jsonData.jsonDataType && (
             <div style={{ marginBottom: 8 }}>
               <strong>Unsupported data type:</strong> {jsonData.jsonDataType}

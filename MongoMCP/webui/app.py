@@ -13,6 +13,7 @@ from typing import Optional, List, Any, Dict
 import threading
 import json
 import queue
+from auth import init_auth, current_username
 base_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.dirname(base_dir))
 
@@ -35,7 +36,12 @@ else:
 mimetypes.add_type('application/javascript', '.js')
 
 app = Flask(__name__, static_folder=os.path.join(os.path.dirname(__file__), 'frontend', 'dist'))
-CORS(app)
+CORS(
+    app,
+    supports_credentials=True,
+    origins=[o.strip() for o in os.getenv('WEBUI_CORS_ORIGINS', 'http://localhost:3000,http://localhost:5173').split(',') if o.strip()],
+)
+init_auth(app, settings)
 
 processor = APIQueryProcessor()
 _site_warmup_lock = threading.Lock()
@@ -164,7 +170,8 @@ def api_query():
         if not q:
             raise ValueError("Empty input")
 
-        username = payload.get("username", "anonymous")
+        username = current_username()
+        payload["username"] = username
         prompt = q
 
         # Create a custom emit handler to capture reasoning steps
@@ -212,6 +219,7 @@ def stream_query():
     # Read request payload here while request context is active
     try:
         payload = request.get_json(force=True)
+        payload["username"] = current_username()
         # Pass a copy of payload into generator to avoid accessing `request` inside it
         return Response(generate(payload), mimetype='application/x-ndjson')
     except Exception as e:

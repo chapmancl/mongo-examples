@@ -1,7 +1,7 @@
 
 .scatter-map-container {
   padding: 20px;
-  background: white;
+  background: var(--mdb-surface);
   border-radius: 8px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
   max-width: 1200px;
@@ -15,12 +15,12 @@
 .map-header h2 {
   margin: 0 0 8px 0;
   font-size: 24px;
-  color: #333;
+  color: var(--mdb-text);
 }
 
 .map-header p {
   margin: 0;
-  color: #666;
+  color: var(--mdb-muted);
   font-size: 14px;
 }
 
@@ -31,9 +31,9 @@
 }
 
 .scatter-map {
-  border: 1px solid #ccc;
+  border: 1px solid var(--mdb-border);
   border-radius: 4px;
-  background: white;
+  background: var(--mdb-surface);
   flex-shrink: 0;
 }
 
@@ -41,15 +41,15 @@
   flex: 1;
   min-width: 200px;
   padding: 15px;
-  background: #f9f9f9;
+  background: var(--mdb-surface-2);
   border-radius: 4px;
-  border: 1px solid #e0e0e0;
+  border: 1px solid var(--mdb-border);
 }
 
 .map-legend h3 {
   margin: 0 0 12px 0;
   font-size: 16px;
-  color: #333;
+  color: var(--mdb-text);
 }
 
 .legend-item {
@@ -59,8 +59,8 @@
   width: 100%;
   padding: 10px;
   margin-bottom: 8px;
-  background: white;
-  border: 1px solid #ddd;
+  background: var(--mdb-surface);
+  border: 1px solid var(--mdb-border);
   border-radius: 4px;
   cursor: pointer;
   transition: all 0.2s;
@@ -69,12 +69,12 @@
 }
 
 .legend-item:hover {
-  background: #f0f0f0;
-  border-color: #999;
+  background: #0a3a4d;
+  border-color: var(--mdb-muted);
 }
 
 .legend-item.active {
-  background: #e3f2fd;
+  background: #0b3a5c;
   border-color: #2196F3;
   font-weight: bold;
 }
@@ -95,7 +95,7 @@
 .marker-info {
   margin-top: 15px;
   padding: 12px;
-  background: #fff3cd;
+  background: #3d3515;
   border-left: 4px solid #ffc107;
   border-radius: 4px;
   font-size: 13px;
@@ -103,21 +103,21 @@
 
 .marker-info strong {
   display: block;
-  color: #333;
+  color: var(--mdb-text);
   margin-bottom: 4px;
 }
 
 .marker-info p {
   margin: 0;
-  color: #666;
+  color: var(--mdb-muted);
 }
 
 .map-error {
   padding: 20px;
-  background: #f8d7da;
-  border: 1px solid #f5c6cb;
+  background: #4a1d22;
+  border: 1px solid #7a2c33;
   border-radius: 4px;
-  color: #721c24;
+  color: #ffb3ba;
 }
 
 @media (max-width: 800px) {

@@ -19,7 +19,7 @@ export default function ExpandableTile({ label, icon, count, children, defaultOp
           borderRadius: 20,
           border: '1px solid #00ED64',
           background: open ? '#00ED64' : 'transparent',
-          color: open ? '#001E2B' : '#00684A',
+          color: open ? '#001E2B' : '#00ED64',
           fontSize: 12,
           fontWeight: 600,
           cursor: 'pointer',
@@ -49,8 +49,9 @@ export default function ExpandableTile({ label, icon, count, children, defaultOp
         <div style={{
           marginTop: 6,
           padding: '10px 14px',
-          background: '#f8fffe',
-          border: '1px solid #d1f5e8',
+          background: '#022b3a',
+          border: '1px solid #1c3a48',
+          color: '#e6edf0',
           borderRadius: 8,
           fontSize: 13,
         }}>

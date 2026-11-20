@@ -1,17 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react'
 import ChatMessage from './ChatMessage'
+import Login from './Login'
+import ChangePassword from './ChangePassword'
 
 const API_URL = import.meta.env.VITE_API_URL || ''
-
-function getCookie(name) {
-  const match = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'))
-  return match ? decodeURIComponent(match[1]) : null
-}
-
-function setCookie(name, value, days = 365) {
-  const expires = new Date(Date.now() + days * 864e5).toUTCString()
-  document.cookie = `${name}=${encodeURIComponent(value)}; expires=${expires}; path=/; SameSite=Lax`
-}
 
 const SESSION_GREETING = (uname) => `Hi, my username is "${uname}".`
 
@@ -117,7 +109,7 @@ function parseHistoryToTurns(history) {
   return turns
 }
 
-export default function App() {
+function ChatApp({ username, onLogout }) {
   const [question, setQuestion] = useState('')
   const [history, setHistory] = useState(null)
   const [turns, setTurns] = useState([])
@@ -135,11 +127,11 @@ export default function App() {
     return id
   })
   const [sessionId, setSessionId] = useState(() => crypto.randomUUID())
-  const [username, setUsername] = useState(() => getCookie('mcp_username') || 'demo-user')
-  const [usernameDraft, setUsernameDraft] = useState(() => getCookie('mcp_username') || 'demo-user')
   const [feedbackGiven, setFeedbackGiven] = useState(null)
   const [reasoningSteps, setReasoningSteps] = useState([])
   const [pendingQuestion, setPendingQuestion] = useState(null)
+  const [logBase, setLogBase] = useState(0)
+  const turnsCountRef = useRef(0)
 
   const modelId = import.meta.env.VITE_LLM_MODEL_ID || ''
 
@@ -147,6 +139,8 @@ export default function App() {
   const autoGreetingFiredRef = useRef(false)
   const liveLogRef = useRef(null)
   const chatBodyRef = useRef(null)
+  const logBodyRef = useRef(null)
+  turnsCountRef.current = turns.length
 
   // allReasoningRef stores reasoning steps for ALL turns, keyed by turn index.
   // This persists across history re-parses so previous turns keep their steps.
@@ -159,6 +153,12 @@ export default function App() {
       chatBodyRef.current.scrollTop = chatBodyRef.current.scrollHeight
     }
   }, [turns, streamedOutput, loading])
+
+  useEffect(() => {
+    if (logBodyRef.current) {
+      logBodyRef.current.scrollTop = logBodyRef.current.scrollHeight
+    }
+  }, [reasoningSteps, turns, loading])
 
   useEffect(() => {
     if (liveLogRef.current) {
@@ -252,6 +252,7 @@ export default function App() {
       const res = await fetch(`${API_URL}/pattern/save`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ user_id: userId, session_id: sessionId, history }),
       })
       const data = await res.json()
@@ -267,6 +268,7 @@ export default function App() {
       const res = await fetch(`${API_URL}/feedback`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ user_id: userId, session_id: sessionId, feedback, history }),
       })
       if (!res.ok) throw new Error('Failed to record feedback')
@@ -279,6 +281,7 @@ export default function App() {
     const historyToSend = historyOverride !== undefined ? historyOverride : history
     const sessionToSend = sessionOverride !== undefined ? sessionOverride : sessionId
     lastQuestionRef.current = inputToSend
+    setLogBase(historyOverride === null ? 0 : turnsCountRef.current)
     if (overrideInput === undefined) setQuestion('')
     setLoading(true)
     setError(null)
@@ -298,9 +301,11 @@ export default function App() {
       const res = await fetch(`${API_URL}/query/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ input: inputToSend, history: historyToSend, user_id: userId, username, session_id: sessionToSend }),
       })
 
+      if (res.status === 401) { onLogout(); return }
       if (!res.ok && res.status !== 404) {
         let errMsg = `HTTP ${res.status}`
         try { const d = await res.json(); errMsg = d.error || JSON.stringify(d) } catch {}
@@ -332,6 +337,7 @@ export default function App() {
         const res2 = await fetch(`${API_URL}/query`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
           body: JSON.stringify({ input: inputToSend, history: historyToSend, user_id: userId, username, session_id: sessionToSend }),
         })
         const data = await res2.json()
@@ -370,7 +376,7 @@ export default function App() {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch(`${API_URL}/reset`, { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+      const res = await fetch(`${API_URL}/reset`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' } })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Failed to reset backend')
     } catch (e) { setError(String(e)) }
@@ -389,34 +395,57 @@ export default function App() {
   const visibleTurns = turns
   const lastTurn = visibleTurns[visibleTurns.length - 1]
 
+  function renderLogSteps(steps) {
+    return steps.map((step, i) => {
+      const rawMsg = typeof step === 'string' ? step : step.message
+      const sts = typeof step === 'string' ? '' : step.status
+      const msg = sts === 'LLM Reasoning' && rawMsg && rawMsg.length > 100
+        ? rawMsg.slice(0, 100) + '…'
+        : rawMsg
+      return (
+        <div key={i} className="log-step" style={{ borderBottom: i < steps.length - 1 ? undefined : 'none' }}>
+          {sts && (
+            <span style={{
+              flexShrink: 0,
+              fontSize: 10,
+              fontWeight: 700,
+              color: sts === 'LLM Reasoning' ? '#001E2B' : '#e6edf0',
+              background: sts === 'LLM Reasoning' ? '#00ED64' : sts.includes('Error') ? '#c0392b' : '#1c3a48',
+              borderRadius: 8,
+              padding: '1px 6px',
+              marginTop: 1,
+            }}>
+              {sts}
+            </span>
+          )}
+          <span style={{ color: '#cfdde3', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{msg}</span>
+        </div>
+      )
+    })
+  }
+
+  const logTurns = turns
+    .map((t, idx) => ({ t, idx }))
+    .filter(({ t, idx }) => t.reasoningSteps && t.reasoningSteps.length > 0 && (!loading || idx < logBase))
+
   return (
     <div className="chat-root">
       {/* Header */}
       <header className="chat-header">
         <img src="/leaflogo.png" alt="Logo" style={{ height: 44, width: 'auto' }} />
-        <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: '#001E2B' }}>MongoDB Atlas MCP AI Demo</h1>
+        <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: '#e6edf0' }}>MongoDB Atlas MCP AI Demo</h1>
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <label htmlFor="username-input" style={{ fontSize: 13, color: '#555' }}>User:</label>
-          <input
-            id="username-input"
-            type="text"
-            value={usernameDraft}
-            onChange={e => setUsernameDraft(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter') { setUsername(usernameDraft); setCookie('mcp_username', usernameDraft) }
-            }}
-            style={{ fontSize: 13, padding: '4px 8px', border: '1px solid #ccc', borderRadius: 6, width: 130 }}
-          />
-          <button className="btn-secondary" onClick={() => { setUsername(usernameDraft); setCookie('mcp_username', usernameDraft) }}>
-            Save
-          </button>
+          <span style={{ fontSize: 13, color: '#8fa5b0' }}>Signed in as <strong style={{ color: '#e6edf0' }}>{username}</strong></span>
+          <button className="btn-secondary" onClick={onLogout}>Log out</button>
         </div>
       </header>
 
+      <div className="chat-main-row">
+      <div className="chat-column">
       {/* Chat body */}
       <main className="chat-body" ref={chatBodyRef}>
         {visibleTurns.filter(t => !isGreeting(t) || t.assistantText).length === 0 && !loading && (
-          <div style={{ textAlign: 'center', color: '#aaa', marginTop: 60, fontSize: 14 }}>
+          <div style={{ textAlign: 'center', color: '#8fa5b0', marginTop: 60, fontSize: 14 }}>
             Ask anything — your conversation will appear here.
           </div>
         )}
@@ -451,15 +480,12 @@ export default function App() {
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: 16 }}>
               <div style={{ maxWidth: '85%' }}>
-                <div style={{ fontSize: 11, color: '#888', marginBottom: 4, marginLeft: 2 }}>
-                  <span style={{ fontWeight: 600, color: '#00684A' }}>● Atlas AI</span>
+                <div style={{ fontSize: 11, color: '#8fa5b0', marginBottom: 4, marginLeft: 2 }}>
+                  <span style={{ fontWeight: 600, color: '#00ED64' }}>● Atlas AI</span>
                 </div>
                 <div className="streaming-bubble">
                   {status && <div className="status-badge">{status}</div>}
-                  {streamedOutput
-                    ? <pre ref={liveLogRef} style={{ margin: 0, whiteSpace: 'pre-wrap', fontSize: 12, maxHeight: 200, overflow: 'auto' }}>{streamedOutput}</pre>
-                    : <span style={{ color: '#aaa', fontSize: 13 }}>⏳ Processing...</span>
-                  }
+                  <span style={{ color: '#8fa5b0', fontSize: 13 }}>⏳ Processing… (see log on the right)</span>
                 </div>
               </div>
             </div>
@@ -467,7 +493,7 @@ export default function App() {
         )}
 
         {error && (
-          <div style={{ color: '#c0392b', background: '#fff0f0', border: '1px solid #f0c0bb', borderRadius: 8, padding: '10px 16px', marginBottom: 16, fontSize: 13 }}>
+          <div style={{ color: '#ff9b8f', background: '#3a1815', border: '1px solid #6b2b25', borderRadius: 8, padding: '10px 16px', marginBottom: 16, fontSize: 13 }}>
             ❌ {error}
           </div>
         )}
@@ -484,7 +510,7 @@ export default function App() {
               className="btn-secondary"
               onClick={() => sendFeedback('negative')}
               disabled={feedbackGiven !== null}
-              style={{ fontSize: 13, color: feedbackGiven === 'negative' ? '#c0392b' : undefined }}
+              style={{ fontSize: 13, color: feedbackGiven === 'negative' ? '#ff7b6b' : undefined }}
             >
               {feedbackGiven === 'negative' ? '🚩 Flagged' : '👎 Flag'}
             </button>
@@ -510,6 +536,62 @@ export default function App() {
           <button className="btn-danger" onClick={resetBackend} disabled={loading}>Reset backend</button>
         </div>
       </footer>
+      </div>
+
+      <aside className="log-sidebar">
+        <div className="log-sidebar-header">🧠 Processing log</div>
+        <div className="log-sidebar-body" ref={logBodyRef}>
+          {logTurns.length === 0 && reasoningSteps.length === 0 && (
+            <div style={{ color: '#8fa5b0', fontSize: 13 }}>No log entries yet.</div>
+          )}
+          {logTurns.map(({ t, idx }) => (
+            <div key={idx}>
+              <div className="log-turn-title">
+                {t.userText.startsWith('Hi, my username is') ? 'Session start' : t.userText.slice(0, 60)}
+              </div>
+              {renderLogSteps(t.reasoningSteps)}
+            </div>
+          ))}
+          {loading && reasoningSteps.length > 0 && (
+            <div>
+              <div className="log-turn-title">
+                {pendingQuestion ? pendingQuestion.slice(0, 60) : 'Current request'} (live)
+              </div>
+              {renderLogSteps(reasoningSteps)}
+            </div>
+          )}
+        </div>
+      </aside>
+      </div>
     </div>
   )
+}
+
+export default function App() {
+  const [username, setUsername] = useState(null)
+  const [mustChange, setMustChange] = useState(false)
+  const [checking, setChecking] = useState(true)
+
+  useEffect(() => {
+    fetch(`${API_URL}/auth/me`, { credentials: 'include' })
+      .then(res => (res.ok ? res.json() : null))
+      .then(data => { setUsername(data?.username || null); setMustChange(!!data?.must_change_password) })
+      .catch(() => setUsername(null))
+      .finally(() => setChecking(false))
+  }, [])
+
+  async function logout() {
+    try { await fetch(`${API_URL}/auth/logout`, { method: 'POST', credentials: 'include' }) } catch {}
+    setUsername(null)
+    setMustChange(false)
+  }
+
+  if (checking) return null
+  if (!username) {
+    return <Login apiUrl={API_URL} onLogin={(u, must) => { setUsername(u); setMustChange(!!must) }} />
+  }
+  if (mustChange) {
+    return <ChangePassword apiUrl={API_URL} username={username} onChanged={() => setMustChange(false)} onLogout={logout} />
+  }
+  return <ChatApp key={username} username={username} onLogout={logout} />
 }

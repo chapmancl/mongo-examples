@@ -51,7 +51,7 @@ function PrettyJson({ data }) {
       style={{
         margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
         fontSize: 12, maxHeight: 420, overflowY: 'auto',
-        background: '#001E2B', color: '#cdd', padding: 12, borderRadius: 6,
+        background: '#00141d', color: '#cdd', border: '1px solid #1c3a48', padding: 12, borderRadius: 6,
         lineHeight: 1.5,
       }}
       dangerouslySetInnerHTML={{ __html: html }}
@@ -135,7 +135,7 @@ function JsonViewer({ data }) {
       )}
       {mode === 'tree' && isObj ? (
         <div style={{
-          background: '#001E2B', color: '#cdd', padding: 12, borderRadius: 6,
+          background: '#00141d', color: '#cdd', border: '1px solid #1c3a48', padding: 12, borderRadius: 6,
           fontSize: 12, lineHeight: 1.6, maxHeight: 420, overflowY: 'auto',
           fontFamily: "'SFMono-Regular', Consolas, monospace",
         }}>
@@ -170,7 +170,6 @@ export default function ChatMessage({
   modelId = '',
 }) {
   const hasTools = toolCalls.length > 0
-  const hasReasoning = reasoningSteps.length > 0
   const hasMap = !!mapData
 
   return (
@@ -201,16 +200,17 @@ export default function ChatMessage({
         <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
           <div style={{ maxWidth: '85%' }}>
             {/* Avatar + name */}
-            <div style={{ fontSize: 11, color: '#888', marginBottom: 4, marginLeft: 2 }}>
-              <span style={{ fontWeight: 600, color: '#00684A' }}>● {friendlyModelName(modelId)}</span>
+            <div style={{ fontSize: 11, color: '#8fa5b0', marginBottom: 4, marginLeft: 2 }}>
+              <span style={{ fontWeight: 600, color: '#00ED64' }}>● {friendlyModelName(modelId)}</span>
             </div>
 
             <div style={{
-              background: '#fff',
-              border: '1px solid #e8f5ee',
+              background: '#022b3a',
+              border: '1px solid #1c3a48',
+              color: '#e6edf0',
               borderRadius: '4px 18px 18px 18px',
               padding: '12px 16px',
-              boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.4)',
             }}>
               {assistantText ? (
                 <div className="markdown-content" style={{ fontSize: 14, lineHeight: 1.6 }}>
@@ -229,7 +229,7 @@ export default function ChatMessage({
             )}
 
             {/* Tile chips row */}
-            {!isStreaming && (hasTools || hasReasoning || hasMap) && (
+            {!isStreaming && (hasTools || hasMap) && (
               <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
 
                 {hasTools && (
@@ -237,10 +237,10 @@ export default function ChatMessage({
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                       {toolCalls.map((tc, i) => (
                         <div key={i}>
-                          <div style={{ fontWeight: 600, color: '#001E2B', marginBottom: 4 }}>
-                            {i + 1}. <code style={{ background: '#e8f5ee', padding: '1px 6px', borderRadius: 4 }}>{tc.name}</code>
+                          <div style={{ fontWeight: 600, color: '#e6edf0', marginBottom: 4 }}>
+                            {i + 1}. <code style={{ background: '#0b3a4d', padding: '1px 6px', borderRadius: 4 }}>{tc.name}</code>
                           </div>
-                          <div style={{ fontSize: 12, color: '#555', marginBottom: 4 }}>Input:</div>
+                          <div style={{ fontSize: 12, color: '#8fa5b0', marginBottom: 4 }}>Input:</div>
                           <JsonViewer data={tc.input} />
                         </div>
                       ))}
@@ -253,8 +253,8 @@ export default function ChatMessage({
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                       {toolCalls.map((tc, i) => (
                         <div key={i}>
-                          <div style={{ fontWeight: 600, color: '#001E2B', marginBottom: 4 }}>
-                            <code style={{ background: '#e8f5ee', padding: '1px 6px', borderRadius: 4 }}>{tc.name}</code>
+                          <div style={{ fontWeight: 600, color: '#e6edf0', marginBottom: 4 }}>
+                            <code style={{ background: '#0b3a4d', padding: '1px 6px', borderRadius: 4 }}>{tc.name}</code>
                           </div>
                           {tc.result !== undefined ? (
                             <JsonViewer data={tc.result} />
@@ -263,46 +263,6 @@ export default function ChatMessage({
                           )}
                         </div>
                       ))}
-                    </div>
-                  </ExpandableTile>
-                )}
-
-                {hasReasoning && (
-                  <ExpandableTile icon="🧠" label="Processing log" count={reasoningSteps.length}>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                      {reasoningSteps.map((step, i) => {
-                        const rawMsg = typeof step === 'string' ? step : step.message
-                        const sts = typeof step === 'string' ? '' : step.status
-                        const msg = sts === 'LLM Reasoning' && rawMsg && rawMsg.length > 100
-                          ? rawMsg.slice(0, 100) + '…'
-                          : rawMsg
-                        return (
-                          <div key={i} style={{
-                            fontSize: 12,
-                            padding: '3px 0',
-                            borderBottom: i < reasoningSteps.length - 1 ? '1px solid #eee' : 'none',
-                            display: 'flex',
-                            gap: 8,
-                            alignItems: 'flex-start',
-                          }}>
-                            {sts && (
-                              <span style={{
-                                flexShrink: 0,
-                                fontSize: 10,
-                                fontWeight: 700,
-                                color: '#fff',
-                                background: sts === 'LLM Reasoning' ? '#00684A' : sts.includes('Error') ? '#c0392b' : '#334',
-                                borderRadius: 8,
-                                padding: '1px 6px',
-                                marginTop: 1,
-                              }}>
-                                {sts}
-                              </span>
-                            )}
-                            <span style={{ color: '#333', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{msg}</span>
-                          </div>
-                        )
-                      })}
                     </div>
                   </ExpandableTile>
                 )}

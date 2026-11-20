@@ -39,9 +39,9 @@ export default function MemoryGraphDisplay({ graphData }) {
     fontSize: 13,
     fontWeight: 600,
     borderRadius: 4,
-    border: '1px solid #d1d5db',
-    background: '#fff',
-    color: '#374151',
+    border: '1px solid #1c3a48',
+    background: '#022b3a',
+    color: '#e6edf0',
     cursor: 'pointer',
     lineHeight: 1.5,
   }
@@ -251,7 +251,7 @@ export default function MemoryGraphDisplay({ graphData }) {
     ctx.font = `${fontSize}px sans-serif`
     ctx.textAlign = 'center'
     ctx.textBaseline = 'top'
-    ctx.fillStyle = '#1f2937'
+    ctx.fillStyle = '#e6edf0'
     ctx.fillText(truncated, node.x, node.y + r + 3 / globalScale)
   }, [hoveredNode])
 
@@ -343,10 +343,10 @@ export default function MemoryGraphDisplay({ graphData }) {
       <div
         ref={containerRef}
         style={{
-          border: '1px solid #e5e7eb',
+          border: '1px solid #1c3a48',
           borderRadius: 8,
           overflow: 'hidden',
-          background: '#f8fafc',
+          background: '#022b3a',
           width: '100%',
         }}
       >
@@ -379,7 +379,7 @@ export default function MemoryGraphDisplay({ graphData }) {
         marginTop: 8,
         minHeight: 56,
         padding: '8px 14px',
-        background: hoveredNode ? '#1e293b' : '#f1f5f9',
+        background: hoveredNode ? '#0b3a4d' : '#022b3a',
         color: hoveredNode ? '#f1f5f9' : '#94a3b8',
         borderRadius: 6,
         fontSize: 12,
@@ -431,13 +431,13 @@ export default function MemoryGraphDisplay({ graphData }) {
       <div style={{
         marginTop: 6,
         padding: '8px 14px',
-        background: '#f0f4f8',
+        background: '#022b3a',
         borderRadius: 6,
         fontSize: 12,
         display: 'flex',
         flexWrap: 'wrap',
         gap: '4px 20px',
-        color: '#4b5563',
+        color: '#8fa5b0',
       }}>
         {count != null && <span><strong>Hydrated:</strong> {count}</span>}
         {graph_neighbor_count != null && <span><strong>Graph neighbors:</strong> {graph_neighbor_count}</span>}
